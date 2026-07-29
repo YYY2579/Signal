@@ -1,0 +1,61 @@
+name: CI
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri/target'
+      - run: npm ci
+      - name: Frontend lint (tsc)
+        run: npm run lint
+      - name: Rust fmt
+        run: cargo fmt --all -- --check
+        working-directory: src-tauri
+      - name: Rust clippy
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: src-tauri
+      - name: Rust test
+        run: cargo test
+        working-directory: src-tauri
+
+  build-verify:
+    needs: lint-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-13
+            args: --target x86_64-apple-darwin
+          - platform: windows-latest
+            args: --target x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.args }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri/target'
+      - run: npm ci
+      - name: Build verify (no upload)
+        run: npm run tauri build ${{ matrix.args }}
