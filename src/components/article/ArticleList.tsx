@@ -1,4 +1,5 @@
 import { useArticlesStore } from "../../stores/articlesStore";
+import { SOURCE_NAMES } from "../../lib/types";
 
 import { ArticleCard } from "./ArticleCard";
 
@@ -7,7 +8,7 @@ export function ArticleList() {
   const loading = useArticlesStore((s) => s.loading);
   const activeSource = useArticlesStore((s) => s.activeSource);
 
-  const title = activeSource ?? "全部文章";
+  const title = activeSource ? (SOURCE_NAMES[activeSource] ?? activeSource) : "全部文章";
 
   return (
     <div className="w-[420px] shrink-0 overflow-y-auto border-r border-line">

@@ -1,7 +1,7 @@
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db;
-use crate::state::AppState;
+use crate::state::{get_cookie_for_source, build_http_client_with_cookie, AppState};
 
 /// 启动所有已启用数据源的定时调度
 pub fn start_scheduler(app: &AppHandle) {
@@ -63,7 +63,14 @@ pub async fn fetch_one_source(app: &AppHandle, source_id: &str) {
         Some(s) => s,
         None => return,
     };
-    let client = state.http.read().unwrap().clone();
+
+    // 读取配置中的 cookie，构建带 cookie 的 client
+    let client = {
+        let config = state.config.read().unwrap();
+        let cookie = get_cookie_for_source(&config.login, source_id);
+        build_http_client_with_cookie(cookie)
+    }; // 读锁释放
+
     let db = state.db.clone();
 
     let _ = app.emit(

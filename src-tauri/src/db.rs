@@ -283,11 +283,20 @@ pub async fn unread_counts(pool: &SqlitePool) -> Result<UnreadCounts, sqlx::Erro
 /// 清理旧数据：保留每源最近 7 天 / 1000 条
 pub async fn cleanup_old(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let cutoff = chrono::Utc::now().timestamp() - 7 * 86400;
-    sqlx::query("DELETE FROM articles WHERE fetched_at < ? AND id NOT IN (
-        SELECT id FROM articles a1 WHERE a1.source = articles.source
-        ORDER BY fetched_at DESC LIMIT 1000
-    )")
-    .bind(cutoff)
+    // 1. 删除超过 7 天的文章
+    sqlx::query("DELETE FROM articles WHERE fetched_at < ?")
+        .bind(cutoff)
+        .execute(pool)
+        .await?;
+    // 2. 每源只保留最近 1000 条（窗口函数排名）
+    sqlx::query(
+        "DELETE FROM articles WHERE id NOT IN (
+            SELECT id FROM (
+                SELECT id, ROW_NUMBER() OVER (PARTITION BY source ORDER BY fetched_at DESC) AS rn
+                FROM articles
+            ) WHERE rn <= 1000
+        )",
+    )
     .execute(pool)
     .await?;
     Ok(())

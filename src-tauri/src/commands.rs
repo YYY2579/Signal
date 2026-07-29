@@ -4,7 +4,7 @@ use tauri_plugin_opener::OpenerExt;
 use crate::config;
 use crate::db;
 use crate::models::{Article, ArticleFilter, FilterConfig, LoginConfig, SourceConfig, UnreadCounts};
-use crate::state::{build_http_client, AppState};
+use crate::state::{build_http_client_with_cookie, get_cookie_for_source, AppState};
 use crate::scheduler;
 
 /// 查询文章列表
@@ -29,7 +29,14 @@ pub async fn get_articles(
 
 /// 手动刷新单个源
 #[tauri::command]
-pub async fn refresh_source(app: AppHandle, source: String) -> Result<(), String> {
+pub async fn refresh_source(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    source: String,
+) -> Result<(), String> {
+    if !state.sources.iter().any(|s| s.id() == source) {
+        return Err(format!("source '{}' not found", source));
+    }
     scheduler::fetch_one_source(&app, &source).await;
     Ok(())
 }
@@ -68,7 +75,12 @@ pub async fn get_article_content(
         .iter()
         .find(|s| s.id() == article.source)
         .ok_or("source not found")?;
-    let client = state.http.read().unwrap().clone();
+    // 按源构建带 cookie 的 client
+    let client = {
+        let config = state.config.read().unwrap();
+        let cookie = get_cookie_for_source(&config.login, &article.source);
+        build_http_client_with_cookie(cookie)
+    };
     if let Some(content) = source
         .fetch_content(&client, &article)
         .await
@@ -143,8 +155,8 @@ pub async fn update_login(
     }
     let cfg = state.config.read().unwrap().clone();
     config::save_config(&app, &cfg)?;
-    // 重建 HTTP client（带 cookie store）
-    let new_client = build_http_client();
+    // 重建基础 HTTP client（带 cookie store，后续按源注入 cookie）
+    let new_client = build_http_client_with_cookie(None);
     *state.http.write().unwrap() = new_client;
     Ok(())
 }
