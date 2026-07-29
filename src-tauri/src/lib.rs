@@ -30,10 +30,8 @@ pub fn run() {
                 .app_data_dir()
                 .expect("failed to resolve app data dir");
             let db_path = app_data.join("signal.db");
-            let pool = tauri::async_runtime::block_on(async {
-                db::init_pool(db_path).await
-            })
-            .expect("failed to init database");
+            let pool = tauri::async_runtime::block_on(async { db::init_pool(db_path).await })
+                .expect("failed to init database");
 
             // 加载配置
             let config = config::load_config(app.handle());

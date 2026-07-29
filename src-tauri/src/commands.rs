@@ -3,9 +3,11 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::config;
 use crate::db;
-use crate::models::{Article, ArticleFilter, FilterConfig, LoginConfig, SourceConfig, UnreadCounts};
-use crate::state::{build_http_client_with_cookie, get_cookie_for_source, AppState};
+use crate::models::{
+    Article, ArticleFilter, FilterConfig, LoginConfig, SourceConfig, UnreadCounts,
+};
 use crate::scheduler;
+use crate::state::{build_http_client_with_cookie, get_cookie_for_source, AppState};
 
 /// 查询文章列表
 #[tauri::command]

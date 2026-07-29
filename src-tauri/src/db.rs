@@ -105,13 +105,15 @@ pub async fn insert_articles(
             new_count += 1;
         } else {
             // 已存在则更新热度
-            sqlx::query("UPDATE articles SET hot_score=?, hot_label=?, comments_count=? WHERE id=?")
-                .bind(a.hot_score)
-                .bind(&a.hot_label)
-                .bind(a.comments_count)
-                .bind(&a.id)
-                .execute(pool)
-                .await?;
+            sqlx::query(
+                "UPDATE articles SET hot_score=?, hot_label=?, comments_count=? WHERE id=?",
+            )
+            .bind(a.hot_score)
+            .bind(&a.hot_label)
+            .bind(a.comments_count)
+            .bind(&a.id)
+            .execute(pool)
+            .await?;
         }
     }
     Ok(new_count)
@@ -128,7 +130,9 @@ fn row_to_article(row: &sqlx::sqlite::SqliteRow) -> Article {
         content: row.get("content"),
         author: row.get("author"),
         hot_score: row.get("hot_score"),
-        hot_label: row.get::<Option<String>, _>("hot_label").unwrap_or_default(),
+        hot_label: row
+            .get::<Option<String>, _>("hot_label")
+            .unwrap_or_default(),
         comments_count: row.get("comments_count"),
         published_at: row.get("published_at"),
         fetched_at: row.get("fetched_at"),
@@ -159,9 +163,18 @@ pub async fn get_articles(
     };
 
     let rows = if let Some(src) = source {
-        sqlx::query(sql).bind(src).bind(limit).bind(offset).fetch_all(pool).await?
+        sqlx::query(sql)
+            .bind(src)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?
     } else {
-        sqlx::query(sql).bind(limit).bind(offset).fetch_all(pool).await?
+        sqlx::query(sql)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?
     };
 
     let mut articles: Vec<Article> = rows.iter().map(row_to_article).collect();
@@ -171,7 +184,9 @@ pub async fn get_articles(
         articles.retain(|a| {
             let text = format!("{} {}", a.title, a.summary).to_lowercase();
             // 白名单：非空时必须命中其一
-            if !f.whitelist.is_empty() && !f.whitelist.iter().any(|k| text.contains(&k.to_lowercase())) {
+            if !f.whitelist.is_empty()
+                && !f.whitelist.iter().any(|k| text.contains(&k.to_lowercase()))
+            {
                 return false;
             }
             // 黑名单：命中任一则隐藏
@@ -185,7 +200,10 @@ pub async fn get_articles(
 }
 
 /// 取单篇文章正文
-pub async fn get_content(pool: &SqlitePool, article_id: &str) -> Result<Option<String>, sqlx::Error> {
+pub async fn get_content(
+    pool: &SqlitePool,
+    article_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
     let row = sqlx::query("SELECT content FROM articles WHERE id = ?")
         .bind(article_id)
         .fetch_optional(pool)
@@ -251,26 +269,26 @@ pub async fn mark_read(pool: &SqlitePool, article_id: &str) -> Result<(), sqlx::
 }
 
 /// 标记全部已读（可选按源）
-pub async fn mark_all_read(
-    pool: &SqlitePool,
-    source: Option<&str>,
-) -> Result<(), sqlx::Error> {
+pub async fn mark_all_read(pool: &SqlitePool, source: Option<&str>) -> Result<(), sqlx::Error> {
     if let Some(src) = source {
         sqlx::query("UPDATE articles SET is_read = 1 WHERE source = ?")
             .bind(src)
             .execute(pool)
             .await?;
     } else {
-        sqlx::query("UPDATE articles SET is_read = 1").execute(pool).await?;
+        sqlx::query("UPDATE articles SET is_read = 1")
+            .execute(pool)
+            .await?;
     }
     Ok(())
 }
 
 /// 各源未读数
 pub async fn unread_counts(pool: &SqlitePool) -> Result<UnreadCounts, sqlx::Error> {
-    let rows = sqlx::query("SELECT source, COUNT(*) AS n FROM articles WHERE is_read = 0 GROUP BY source")
-        .fetch_all(pool)
-        .await?;
+    let rows =
+        sqlx::query("SELECT source, COUNT(*) AS n FROM articles WHERE is_read = 0 GROUP BY source")
+            .fetch_all(pool)
+            .await?;
     let mut map = UnreadCounts::new();
     for r in rows {
         let source: String = r.get("source");

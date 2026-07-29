@@ -64,10 +64,9 @@ impl SourceFetcher for Zhihu {
         if let Some(items) = hot.data {
             for item in items {
                 let hot_score = parse_hot_score(&item.detail_text);
-                let url = item
-                    .target
-                    .url
-                    .unwrap_or_else(|| format!("https://www.zhihu.com/question/{}", item.target.id));
+                let url = item.target.url.unwrap_or_else(|| {
+                    format!("https://www.zhihu.com/question/{}", item.target.id)
+                });
                 articles.push(RawArticle {
                     native_id: item.target.id.to_string(),
                     title: item.target.title,

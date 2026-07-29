@@ -74,11 +74,7 @@ impl SourceFetcher for HackerNews {
                         title,
                         url,
                         // HN 外链无摘要；Ask/Show HN 用 text 去标签作摘要
-                        summary: item
-                            .text
-                            .as_deref()
-                            .map(strip_html)
-                            .unwrap_or_default(),
+                        summary: item.text.as_deref().map(strip_html).unwrap_or_default(),
                         author: None,
                         hot_score: score,
                         hot_label: format!("{} points", score),

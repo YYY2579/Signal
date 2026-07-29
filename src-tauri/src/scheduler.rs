@@ -1,7 +1,7 @@
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db;
-use crate::state::{get_cookie_for_source, build_http_client_with_cookie, AppState};
+use crate::state::{build_http_client_with_cookie, get_cookie_for_source, AppState};
 
 /// 启动所有已启用数据源的定时调度
 pub fn start_scheduler(app: &AppHandle) {
@@ -81,10 +81,9 @@ pub async fn fetch_one_source(app: &AppHandle, source_id: &str) {
     match source.fetch_hot(&client).await {
         Ok(raws) => {
             let fetched_at = chrono::Utc::now().timestamp();
-            let new_count =
-                db::insert_articles(&db, source_id, fetched_at, raws)
-                    .await
-                    .unwrap_or(0);
+            let new_count = db::insert_articles(&db, source_id, fetched_at, raws)
+                .await
+                .unwrap_or(0);
             let _ = app.emit(
                 "articles-updated",
                 serde_json::json!({ "source": source_id, "new_count": new_count }),

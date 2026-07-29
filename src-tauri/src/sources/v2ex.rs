@@ -80,7 +80,10 @@ impl SourceFetcher for V2ex {
         article: &Article,
     ) -> FetchResult<Option<String>> {
         let topics: Vec<Topic> = client
-            .get(format!("{}/topics/show.json?id={}", BASE, article.native_id))
+            .get(format!(
+                "{}/topics/show.json?id={}",
+                BASE, article.native_id
+            ))
             .send()
             .await?
             .json()
