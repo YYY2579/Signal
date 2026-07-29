@@ -5,7 +5,7 @@ use tokio::sync::Semaphore;
 
 use crate::models::{Article, RawArticle};
 
-use super::{FetchError, FetchResult, SourceFetcher};
+use super::{FetchResult, SourceFetcher};
 
 pub struct HackerNews;
 

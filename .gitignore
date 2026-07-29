@@ -25,3 +25,7 @@ dist-ssr
 
 # WorkBuddy workspace data
 .workbuddy/
+
+# 设计效果图（仅本地参考，不入库）
+ChatGPT Image*.png
+*.design.png

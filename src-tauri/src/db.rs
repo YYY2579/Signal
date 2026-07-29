@@ -91,14 +91,14 @@ pub async fn insert_articles(
         .bind(&a.title)
         .bind(&a.url)
         .bind(&a.summary)
-        .bind(&a.content)
-        .bind(&a.author)
+        .bind(a.content.as_deref())
+        .bind(a.author.as_deref())
         .bind(a.hot_score)
         .bind(&a.hot_label)
         .bind(a.comments_count)
         .bind(a.published_at)
         .bind(a.fetched_at)
-        .bind(&a.thumbnail)
+        .bind(a.thumbnail.as_deref())
         .execute(pool)
         .await?;
         if result.rows_affected() > 0 {
