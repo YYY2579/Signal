@@ -65,6 +65,7 @@ settings.local.json
 .workbuddy/
 
 # Local AI development records
+.codex/
 .loop/
 /task_plan.md
 /findings.md
