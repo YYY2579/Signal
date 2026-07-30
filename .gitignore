@@ -7,10 +7,48 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+node_modules/
+dist/
+dist-ssr/
+coverage/
+playwright-report/
+test-results/
 *.local
+
+# Local environment and credential files
+.env
+.env.*
+!.env.example
+!.env.*.example
+.npmrc
+.netrc
+.pypirc
+.git-credentials
+.cargo/credentials
+.cargo/credentials.toml
+.aws/
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+
+# Local application state
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+settings.json
+settings.local.json
 
 # Editor directories and files
 .vscode/*
@@ -26,6 +64,18 @@ dist-ssr
 # WorkBuddy workspace data
 .workbuddy/
 
+# Local AI development records
+.loop/
+/task_plan.md
+/findings.md
+/progress.md
+/daily-summary.md
+
+# Local merge/conflict copies
+**/* 2.tsx
+
 # 设计效果图（仅本地参考，不入库）
 ChatGPT Image*.png
 *.design.png
+*.screenshot.png
+/screenshots/

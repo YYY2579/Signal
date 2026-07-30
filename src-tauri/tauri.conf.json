@@ -20,15 +20,20 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": {
+        "default-src": "'self' customprotocol: asset:",
+        "connect-src": "ipc: http://ipc.localhost",
+        "img-src": "'self' asset: http://asset.localhost blob: data: https:",
+        "style-src": "'self' 'unsafe-inline'"
+      }
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
     "category": "News",
-    "shortDescription": "多社区热门文章聚合阅读器",
-    "longDescription": "聚合 Hacker News、V2EX、掘金、知乎热门内容，统一信息流展示，支持离线阅读。",
+    "shortDescription": "本地优先的个人 AI 信息情报工作台",
+    "longDescription": "聚合技术社区、项目趋势和技术博客，提供热点排序、智能阅读、AI 洞察与本地知识沉淀。",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
