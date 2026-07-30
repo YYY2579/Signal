@@ -34,10 +34,15 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+      - name: Release hygiene
+        run: scripts/check-release-hygiene.sh
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - uses: dtolnay/rust-toolchain@stable
+          cache: npm
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: clippy, rustfmt
       - name: Validate tag and project versions
         id: metadata
         env:
@@ -60,7 +65,7 @@ jobs:
           version="${tag#v}"
           package_version="$(node -e "const fs = require('fs'); process.stdout.write(JSON.parse(fs.readFileSync('package.json', 'utf8')).version)")"
           tauri_version="$(node -e "const fs = require('fs'); process.stdout.write(JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8')).version)")"
-          cargo metadata --manifest-path src-tauri/Cargo.toml --no-deps --format-version 1 > "$RUNNER_TEMP/cargo-metadata.json"
+          cargo metadata --locked --manifest-path src-tauri/Cargo.toml --no-deps --format-version 1 > "$RUNNER_TEMP/cargo-metadata.json"
           cargo_version="$(node -e "const fs = require('fs'); const metadata = JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); const pkg = metadata.packages.find(({ manifest_path }) => manifest_path.endsWith('/src-tauri/Cargo.toml')); if (!pkg) process.exit(1); process.stdout.write(pkg.version)" "$RUNNER_TEMP/cargo-metadata.json")"
 
           for entry in \
@@ -76,6 +81,11 @@ jobs:
           done
 
           release_sha="$(git rev-parse "$GITHUB_SHA^{commit}")"
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$release_sha" refs/remotes/origin/main; then
+            echo "Release commit $release_sha is not part of main" >&2
+            exit 1
+          fi
           if git show-ref --verify --quiet "refs/tags/$tag"; then
             tag_sha="$(git rev-list -n 1 "$tag")"
             if [[ "$tag_sha" != "$release_sha" ]]; then
@@ -90,6 +100,37 @@ jobs:
             echo "tag=$tag"
             echo "version=$version"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - run: npm ci
+      - name: Frontend lint
+        run: npm run lint
+      - name: Frontend build
+        run: npm run build
+      - name: Rust format
+        run: cargo fmt --all -- --check
+        working-directory: src-tauri
+      - name: Rust clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+        working-directory: src-tauri
+      - name: Rust tests
+        run: cargo test --locked --all-targets
+        working-directory: src-tauri
 
   build:
     name: Package ${{ matrix.name }}
@@ -153,15 +194,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri/target
+          workspaces: src-tauri -> target
       - run: npm ci
       - name: Build installer
-        run: npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundle }}
+        run: npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundle }} -- --locked
       - name: Normalize release artifact
         shell: bash
         run: |
