@@ -30,9 +30,6 @@ impl SourceFetcher for V2ex {
     fn id(&self) -> &'static str {
         "v2ex"
     }
-    fn name(&self) -> &'static str {
-        "V2EX"
-    }
 
     async fn fetch_hot(&self, client: &reqwest::Client) -> FetchResult<Vec<RawArticle>> {
         let resp = client

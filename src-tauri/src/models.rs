@@ -27,6 +27,12 @@ pub struct Article {
     pub is_read: bool,
     /// 正文是否已缓存
     pub has_content: bool,
+    pub is_bookmarked: bool,
+    pub is_read_later: bool,
+    pub in_knowledge: bool,
+    pub ai_status: Option<String>,
+    pub ai_summary: Option<String>,
+    pub ai_score: Option<f64>,
 }
 
 /// 抓取原始结构（入库前映射为 Article）
@@ -65,8 +71,110 @@ impl RawArticle {
             thumbnail: self.thumbnail,
             is_read: false,
             has_content: false,
+            is_bookmarked: false,
+            is_read_later: false,
+            in_knowledge: false,
+            ai_status: None,
+            ai_summary: None,
+            ai_score: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiPreferences {
+    #[serde(default = "default_ai_provider")]
+    pub provider: String,
+    #[serde(default = "default_ai_base_url")]
+    pub base_url: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default = "default_require_review")]
+    pub require_review: bool,
+}
+
+impl Default for AiPreferences {
+    fn default() -> Self {
+        Self {
+            provider: default_ai_provider(),
+            base_url: default_ai_base_url(),
+            model: String::new(),
+            require_review: true,
+        }
+    }
+}
+
+fn default_ai_provider() -> String {
+    "openai-compatible".into()
+}
+
+fn default_ai_base_url() -> String {
+    "https://api.openai.com/v1".into()
+}
+
+fn default_require_review() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiSettings {
+    pub provider: String,
+    pub base_url: String,
+    pub model: String,
+    pub configured: bool,
+    pub require_review: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiValidation {
+    pub valid: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiSearchResponse {
+    pub answer: String,
+    pub articles: Vec<Article>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelatedReading {
+    pub title: String,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArticleInsight {
+    pub status: String,
+    pub summary: String,
+    pub key_points: Vec<String>,
+    pub impact_analysis: String,
+    pub technologies: Vec<String>,
+    pub related_reading: Vec<RelatedReading>,
+    pub score: Option<f64>,
+    pub error: Option<String>,
+    pub updated_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrendPoint {
+    pub timestamp: i64,
+    pub value: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LabelValue {
+    pub label: String,
+    pub value: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArticleAnalytics {
+    pub view_count: Option<i64>,
+    pub ai_score: Option<f64>,
+    pub trend: Vec<TrendPoint>,
+    pub keywords: Vec<LabelValue>,
+    pub domains: Vec<LabelValue>,
 }
 
 /// 数据源配置
@@ -75,7 +183,13 @@ pub struct SourceConfig {
     pub id: String,
     pub name: String,
     pub enabled: bool,
+    #[serde(default = "default_subscribed")]
+    pub subscribed: bool,
     pub interval_minutes: u64,
+}
+
+fn default_subscribed() -> bool {
+    true
 }
 
 /// 登录态配置（每源可选 cookie）
@@ -99,6 +213,7 @@ pub struct FilterConfig {
 /// 应用总配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
+    #[serde(default = "default_source_configs")]
     pub sources: Vec<SourceConfig>,
     #[serde(default)]
     pub filters: FilterConfig,
@@ -106,42 +221,88 @@ pub struct AppConfig {
     pub login: LoginConfig,
     #[serde(default)]
     pub prefetch_content: bool,
+    #[serde(default)]
+    pub ai: AiPreferences,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            sources: vec![
-                SourceConfig {
-                    id: "hackernews".into(),
-                    name: "Hacker News".into(),
-                    enabled: true,
-                    interval_minutes: 30,
-                },
-                SourceConfig {
-                    id: "v2ex".into(),
-                    name: "V2EX".into(),
-                    enabled: true,
-                    interval_minutes: 30,
-                },
-                SourceConfig {
-                    id: "juejin".into(),
-                    name: "掘金".into(),
-                    enabled: true,
-                    interval_minutes: 20,
-                },
-                SourceConfig {
-                    id: "zhihu".into(),
-                    name: "知乎".into(),
-                    enabled: true,
-                    interval_minutes: 20,
-                },
-            ],
+            sources: default_source_configs(),
             filters: FilterConfig::default(),
             login: LoginConfig::default(),
             prefetch_content: false,
+            ai: AiPreferences::default(),
         }
     }
+}
+
+pub fn default_source_configs() -> Vec<SourceConfig> {
+    vec![
+        SourceConfig {
+            id: "hackernews".into(),
+            name: "Hacker News".into(),
+            enabled: true,
+            subscribed: true,
+            interval_minutes: 30,
+        },
+        SourceConfig {
+            id: "github".into(),
+            name: "GitHub Trending".into(),
+            enabled: true,
+            subscribed: true,
+            interval_minutes: 60,
+        },
+        SourceConfig {
+            id: "v2ex".into(),
+            name: "V2EX".into(),
+            enabled: true,
+            subscribed: true,
+            interval_minutes: 30,
+        },
+        SourceConfig {
+            id: "juejin".into(),
+            name: "掘金".into(),
+            enabled: true,
+            subscribed: true,
+            interval_minutes: 20,
+        },
+        SourceConfig {
+            id: "zhihu".into(),
+            name: "知乎热榜".into(),
+            enabled: true,
+            subscribed: true,
+            interval_minutes: 20,
+        },
+        SourceConfig {
+            id: "csdn".into(),
+            name: "CSDN 热榜".into(),
+            enabled: true,
+            subscribed: true,
+            interval_minutes: 30,
+        },
+        SourceConfig {
+            id: "leetcode".into(),
+            name: "力扣讨论".into(),
+            enabled: true,
+            subscribed: true,
+            interval_minutes: 30,
+        },
+        SourceConfig {
+            id: "reddit".into(),
+            name: "Reddit · r/programming".into(),
+            enabled: false,
+            subscribed: false,
+            interval_minutes: 60,
+        },
+        SourceConfig {
+            id: "rustblog".into(),
+            name: "Rust 官方博客".into(),
+            enabled: true,
+            subscribed: true,
+            interval_minutes: 120,
+        },
+    ]
 }
 
 /// 查询过滤参数

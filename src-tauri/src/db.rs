@@ -2,7 +2,10 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::Row;
 use std::path::PathBuf;
 
-use crate::models::{Article, ArticleFilter, RawArticle, UnreadCounts};
+use crate::models::{
+    Article, ArticleAnalytics, ArticleFilter, ArticleInsight, LabelValue, RawArticle,
+    RelatedReading, TrendPoint, UnreadCounts,
+};
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS articles (
@@ -54,6 +57,50 @@ CREATE TABLE IF NOT EXISTS fetch_log (
   new_count INTEGER,
   error TEXT
 );
+
+CREATE TABLE IF NOT EXISTS article_user_state (
+  article_id TEXT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
+  bookmarked INTEGER NOT NULL DEFAULT 0,
+  read_later INTEGER NOT NULL DEFAULT 0,
+  in_knowledge INTEGER NOT NULL DEFAULT 0,
+  view_count INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_user_state_bookmarked ON article_user_state(bookmarked);
+CREATE INDEX IF NOT EXISTS idx_user_state_read_later ON article_user_state(read_later);
+CREATE INDEX IF NOT EXISTS idx_user_state_knowledge ON article_user_state(in_knowledge);
+
+CREATE TABLE IF NOT EXISTS notes (
+  id TEXT PRIMARY KEY,
+  article_id TEXT NOT NULL UNIQUE REFERENCES articles(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_artifacts (
+  article_id TEXT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  key_points TEXT NOT NULL DEFAULT '[]',
+  impact_analysis TEXT NOT NULL DEFAULT '',
+  technologies TEXT NOT NULL DEFAULT '[]',
+  related_reading TEXT NOT NULL DEFAULT '[]',
+  score REAL,
+  error TEXT,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS hot_snapshots (
+  article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  captured_at INTEGER NOT NULL,
+  hot_score INTEGER NOT NULL,
+  comments_count INTEGER,
+  PRIMARY KEY(article_id, captured_at)
+);
+CREATE INDEX IF NOT EXISTS idx_hot_snapshots_article_time
+  ON hot_snapshots(article_id, captured_at DESC);
 "#;
 
 pub async fn init_pool(db_path: PathBuf) -> Result<SqlitePool, sqlx::Error> {
@@ -62,10 +109,24 @@ pub async fn init_pool(db_path: PathBuf) -> Result<SqlitePool, sqlx::Error> {
     }
     let options = SqliteConnectOptions::new()
         .filename(db_path)
-        .create_if_missing(true);
+        .create_if_missing(true)
+        .foreign_keys(true);
     let pool = SqlitePool::connect_with(options).await?;
     sqlx::query(SCHEMA).execute(&pool).await?;
+    repair_legacy_article_urls(&pool).await?;
     Ok(pool)
+}
+
+async fn repair_legacy_article_urls(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE articles
+         SET url = 'https://www.zhihu.com/question/' || native_id
+         WHERE source = 'zhihu'
+           AND url != ('https://www.zhihu.com/question/' || native_id)",
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 /// 批量插入文章（去重），返回新增条数
@@ -115,6 +176,16 @@ pub async fn insert_articles(
             .execute(pool)
             .await?;
         }
+        sqlx::query(
+            "INSERT OR REPLACE INTO hot_snapshots
+             (article_id, captured_at, hot_score, comments_count) VALUES (?,?,?,?)",
+        )
+        .bind(&a.id)
+        .bind(fetched_at)
+        .bind(a.hot_score)
+        .bind(a.comments_count)
+        .execute(pool)
+        .await?;
     }
     Ok(new_count)
 }
@@ -139,7 +210,28 @@ fn row_to_article(row: &sqlx::sqlite::SqliteRow) -> Article {
         thumbnail: row.get("thumbnail"),
         is_read: row.get::<i64, _>("is_read") != 0,
         has_content: row.get::<i64, _>("has_content") != 0,
+        is_bookmarked: row.get::<i64, _>("is_bookmarked") != 0,
+        is_read_later: row.get::<i64, _>("is_read_later") != 0,
+        in_knowledge: row.get::<i64, _>("in_knowledge") != 0,
+        ai_status: row.get("ai_status"),
+        ai_summary: row.get("ai_summary"),
+        ai_score: row.get("ai_score"),
     }
+}
+
+fn matches_filter(article: &Article, filter: &ArticleFilter) -> bool {
+    let text = format!("{} {}", article.title, article.summary).to_lowercase();
+    let matches_whitelist = filter.whitelist.is_empty()
+        || filter
+            .whitelist
+            .iter()
+            .any(|keyword| text.contains(&keyword.to_lowercase()));
+    let matches_blacklist = filter
+        .blacklist
+        .iter()
+        .any(|keyword| text.contains(&keyword.to_lowercase()));
+
+    matches_whitelist && !matches_blacklist
 }
 
 /// 查询文章列表（不带 content），支持按源/关键词过滤
@@ -151,15 +243,31 @@ pub async fn get_articles(
     filter: Option<&ArticleFilter>,
 ) -> Result<Vec<Article>, sqlx::Error> {
     let sql = if source.is_some() {
-        "SELECT id, source, native_id, title, url, summary, NULL AS content, author,
-                hot_score, hot_label, comments_count, published_at, fetched_at,
-                thumbnail, is_read, has_content
-         FROM articles WHERE source = ? ORDER BY fetched_at DESC LIMIT ? OFFSET ?"
+        "SELECT a.id, a.source, a.native_id, a.title, a.url, a.summary,
+                NULL AS content, a.author, a.hot_score, a.hot_label, a.comments_count,
+                a.published_at, a.fetched_at, a.thumbnail, a.is_read, a.has_content,
+                COALESCE(us.bookmarked, 0) AS is_bookmarked,
+                COALESCE(us.read_later, 0) AS is_read_later,
+                COALESCE(us.in_knowledge, 0) AS in_knowledge,
+                ai.status AS ai_status,
+                CASE WHEN ai.status IN ('draft', 'accepted') THEN ai.summary END AS ai_summary,
+                CASE WHEN ai.status IN ('draft', 'accepted') THEN ai.score END AS ai_score
+         FROM articles a LEFT JOIN article_user_state us ON us.article_id = a.id
+         LEFT JOIN ai_artifacts ai ON ai.article_id = a.id
+         WHERE a.source = ? ORDER BY a.fetched_at DESC LIMIT ? OFFSET ?"
     } else {
-        "SELECT id, source, native_id, title, url, summary, NULL AS content, author,
-                hot_score, hot_label, comments_count, published_at, fetched_at,
-                thumbnail, is_read, has_content
-         FROM articles ORDER BY fetched_at DESC LIMIT ? OFFSET ?"
+        "SELECT a.id, a.source, a.native_id, a.title, a.url, a.summary,
+                NULL AS content, a.author, a.hot_score, a.hot_label, a.comments_count,
+                a.published_at, a.fetched_at, a.thumbnail, a.is_read, a.has_content,
+                COALESCE(us.bookmarked, 0) AS is_bookmarked,
+                COALESCE(us.read_later, 0) AS is_read_later,
+                COALESCE(us.in_knowledge, 0) AS in_knowledge,
+                ai.status AS ai_status,
+                CASE WHEN ai.status IN ('draft', 'accepted') THEN ai.summary END AS ai_summary,
+                CASE WHEN ai.status IN ('draft', 'accepted') THEN ai.score END AS ai_score
+         FROM articles a LEFT JOIN article_user_state us ON us.article_id = a.id
+         LEFT JOIN ai_artifacts ai ON ai.article_id = a.id
+         ORDER BY a.fetched_at DESC LIMIT ? OFFSET ?"
     };
 
     let rows = if let Some(src) = source {
@@ -181,20 +289,7 @@ pub async fn get_articles(
 
     // 关键词过滤（Rust 端，支持黑/白名单）
     if let Some(f) = filter {
-        articles.retain(|a| {
-            let text = format!("{} {}", a.title, a.summary).to_lowercase();
-            // 白名单：非空时必须命中其一
-            if !f.whitelist.is_empty()
-                && !f.whitelist.iter().any(|k| text.contains(&k.to_lowercase()))
-            {
-                return false;
-            }
-            // 黑名单：命中任一则隐藏
-            if f.blacklist.iter().any(|k| text.contains(&k.to_lowercase())) {
-                return false;
-            }
-            true
-        });
+        articles.retain(|article| matches_filter(article, f));
     }
     Ok(articles)
 }
@@ -217,10 +312,18 @@ pub async fn get_article_by_id(
     article_id: &str,
 ) -> Result<Option<Article>, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT id, source, native_id, title, url, summary, content, author,
-                hot_score, hot_label, comments_count, published_at, fetched_at,
-                thumbnail, is_read, has_content
-         FROM articles WHERE id = ?",
+        "SELECT a.id, a.source, a.native_id, a.title, a.url, a.summary, a.content,
+                a.author, a.hot_score, a.hot_label, a.comments_count, a.published_at,
+                a.fetched_at, a.thumbnail, a.is_read, a.has_content,
+                COALESCE(us.bookmarked, 0) AS is_bookmarked,
+                COALESCE(us.read_later, 0) AS is_read_later,
+                COALESCE(us.in_knowledge, 0) AS in_knowledge,
+                ai.status AS ai_status,
+                CASE WHEN ai.status IN ('draft', 'accepted') THEN ai.summary END AS ai_summary,
+                CASE WHEN ai.status IN ('draft', 'accepted') THEN ai.score END AS ai_score
+         FROM articles a LEFT JOIN article_user_state us ON us.article_id = a.id
+         LEFT JOIN ai_artifacts ai ON ai.article_id = a.id
+         WHERE a.id = ?",
     )
     .bind(article_id)
     .fetch_optional(pool)
@@ -243,20 +346,49 @@ pub async fn update_content(
 }
 
 /// FTS5 全文搜索
-pub async fn search_articles(pool: &SqlitePool, query: &str) -> Result<Vec<Article>, sqlx::Error> {
+pub async fn search_articles(
+    pool: &SqlitePool,
+    query: &str,
+    filter: Option<&ArticleFilter>,
+) -> Result<Vec<Article>, sqlx::Error> {
+    let query = build_fts_query(query);
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let rows = sqlx::query(
         "SELECT a.id, a.source, a.native_id, a.title, a.url, a.summary, NULL AS content,
                 a.author, a.hot_score, a.hot_label, a.comments_count, a.published_at,
-                a.fetched_at, a.thumbnail, a.is_read, a.has_content
+                a.fetched_at, a.thumbnail, a.is_read, a.has_content,
+                COALESCE(us.bookmarked, 0) AS is_bookmarked,
+                COALESCE(us.read_later, 0) AS is_read_later,
+                COALESCE(us.in_knowledge, 0) AS in_knowledge,
+                ai.status AS ai_status,
+                CASE WHEN ai.status IN ('draft', 'accepted') THEN ai.summary END AS ai_summary,
+                CASE WHEN ai.status IN ('draft', 'accepted') THEN ai.score END AS ai_score
          FROM articles_fts f
          JOIN articles a ON a.rowid = f.rowid
+         LEFT JOIN article_user_state us ON us.article_id = a.id
+         LEFT JOIN ai_artifacts ai ON ai.article_id = a.id
          WHERE articles_fts MATCH ?
          ORDER BY a.hot_score DESC LIMIT 100",
     )
     .bind(query)
     .fetch_all(pool)
     .await?;
-    Ok(rows.iter().map(row_to_article).collect())
+    let mut articles: Vec<Article> = rows.iter().map(row_to_article).collect();
+    if let Some(filter) = filter {
+        articles.retain(|article| matches_filter(article, filter));
+    }
+    Ok(articles)
+}
+
+fn build_fts_query(query: &str) -> String {
+    query
+        .split_whitespace()
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" AND ")
 }
 
 /// 标记已读
@@ -266,6 +398,210 @@ pub async fn mark_read(pool: &SqlitePool, article_id: &str) -> Result<(), sqlx::
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// 打开文章：标记已读并记录一次真实阅读。
+pub async fn record_article_view(pool: &SqlitePool, article_id: &str) -> Result<(), sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("UPDATE articles SET is_read = 1 WHERE id = ?")
+        .bind(article_id)
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::query(
+        "INSERT INTO article_user_state (article_id, view_count, updated_at)
+         VALUES (?, 1, ?)
+         ON CONFLICT(article_id) DO UPDATE SET
+           view_count = view_count + 1,
+           updated_at = excluded.updated_at",
+    )
+    .bind(article_id)
+    .bind(chrono::Utc::now().timestamp())
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+pub async fn mark_unread(pool: &SqlitePool, article_id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE articles SET is_read = 0 WHERE id = ?")
+        .bind(article_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_article_flag(
+    pool: &SqlitePool,
+    article_id: &str,
+    flag: &str,
+    value: bool,
+) -> Result<(), sqlx::Error> {
+    let column = match flag {
+        "bookmarked" | "is_bookmarked" => "bookmarked",
+        "read_later" | "is_read_later" => "read_later",
+        "knowledge" | "in_knowledge" | "is_in_knowledge" => "in_knowledge",
+        _ => {
+            return Err(sqlx::Error::Protocol(format!(
+                "unknown article flag: {flag}"
+            )))
+        }
+    };
+    let sql = format!(
+        "INSERT INTO article_user_state (article_id, {column}, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(article_id) DO UPDATE SET
+           {column} = excluded.{column}, updated_at = excluded.updated_at"
+    );
+    sqlx::query(&sql)
+        .bind(article_id)
+        .bind(i64::from(value))
+        .bind(chrono::Utc::now().timestamp())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn save_article_note(
+    pool: &SqlitePool,
+    article_id: &str,
+    title: &str,
+    content: &str,
+) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query(
+        "INSERT INTO notes (id, article_id, title, content, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(article_id) DO UPDATE SET
+           title = excluded.title, content = excluded.content, updated_at = excluded.updated_at",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(article_id)
+    .bind(title)
+    .bind(content)
+    .bind(now)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_article_insight(
+    pool: &SqlitePool,
+    article_id: &str,
+) -> Result<Option<ArticleInsight>, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT status, summary, key_points, impact_analysis, technologies,
+                related_reading, score, error, updated_at
+         FROM ai_artifacts WHERE article_id = ?",
+    )
+    .bind(article_id)
+    .fetch_optional(pool)
+    .await?;
+    row.map(|row| {
+        let key_points = serde_json::from_str::<Vec<String>>(&row.get::<String, _>("key_points"))
+            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+        let technologies =
+            serde_json::from_str::<Vec<String>>(&row.get::<String, _>("technologies"))
+                .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+        let related_reading =
+            serde_json::from_str::<Vec<RelatedReading>>(&row.get::<String, _>("related_reading"))
+                .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+        Ok(ArticleInsight {
+            status: row.get("status"),
+            summary: row.get("summary"),
+            key_points,
+            impact_analysis: row.get("impact_analysis"),
+            technologies,
+            related_reading,
+            score: row.get("score"),
+            error: row.get("error"),
+            updated_at: Some(row.get("updated_at")),
+        })
+    })
+    .transpose()
+}
+
+pub async fn save_article_insight(
+    pool: &SqlitePool,
+    article_id: &str,
+    insight: &ArticleInsight,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO ai_artifacts
+         (article_id, status, summary, key_points, impact_analysis, technologies,
+          related_reading, score, error, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(article_id) DO UPDATE SET
+           status = excluded.status, summary = excluded.summary,
+           key_points = excluded.key_points, impact_analysis = excluded.impact_analysis,
+           technologies = excluded.technologies, related_reading = excluded.related_reading,
+           score = excluded.score, error = excluded.error, updated_at = excluded.updated_at",
+    )
+    .bind(article_id)
+    .bind(&insight.status)
+    .bind(&insight.summary)
+    .bind(serde_json::to_string(&insight.key_points).unwrap_or_else(|_| "[]".into()))
+    .bind(&insight.impact_analysis)
+    .bind(serde_json::to_string(&insight.technologies).unwrap_or_else(|_| "[]".into()))
+    .bind(serde_json::to_string(&insight.related_reading).unwrap_or_else(|_| "[]".into()))
+    .bind(insight.score)
+    .bind(insight.error.as_deref())
+    .bind(
+        insight
+            .updated_at
+            .unwrap_or_else(|| chrono::Utc::now().timestamp()),
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_article_analytics(
+    pool: &SqlitePool,
+    article_id: &str,
+) -> Result<ArticleAnalytics, sqlx::Error> {
+    let view_count = sqlx::query("SELECT view_count FROM article_user_state WHERE article_id = ?")
+        .bind(article_id)
+        .fetch_optional(pool)
+        .await?
+        .map(|row| row.get::<i64, _>("view_count"));
+    let insight = get_article_insight(pool, article_id).await?;
+    let cutoff = chrono::Utc::now().timestamp() - 24 * 60 * 60;
+    let trend = sqlx::query(
+        "SELECT captured_at, hot_score FROM hot_snapshots
+         WHERE article_id = ? AND captured_at >= ? ORDER BY captured_at ASC",
+    )
+    .bind(article_id)
+    .bind(cutoff)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|row| TrendPoint {
+        timestamp: row.get("captured_at"),
+        value: row.get("hot_score"),
+    })
+    .collect();
+    let keywords = insight
+        .as_ref()
+        .map(|value| {
+            value
+                .technologies
+                .iter()
+                .take(12)
+                .map(|label| LabelValue {
+                    label: label.clone(),
+                    value: 1,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(ArticleAnalytics {
+        view_count,
+        ai_score: insight.as_ref().and_then(|value| value.score),
+        trend,
+        keywords,
+        domains: Vec::new(),
+    })
 }
 
 /// 标记全部已读（可选按源）
@@ -302,10 +638,16 @@ pub async fn unread_counts(pool: &SqlitePool) -> Result<UnreadCounts, sqlx::Erro
 pub async fn cleanup_old(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let cutoff = chrono::Utc::now().timestamp() - 7 * 86400;
     // 1. 删除超过 7 天的文章
-    sqlx::query("DELETE FROM articles WHERE fetched_at < ?")
-        .bind(cutoff)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "DELETE FROM articles
+         WHERE fetched_at < ? AND id NOT IN (
+           SELECT article_id FROM article_user_state
+           WHERE bookmarked = 1 OR read_later = 1 OR in_knowledge = 1
+         )",
+    )
+    .bind(cutoff)
+    .execute(pool)
+    .await?;
     // 2. 每源只保留最近 1000 条（窗口函数排名）
     sqlx::query(
         "DELETE FROM articles WHERE id NOT IN (
@@ -313,6 +655,9 @@ pub async fn cleanup_old(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 SELECT id, ROW_NUMBER() OVER (PARTITION BY source ORDER BY fetched_at DESC) AS rn
                 FROM articles
             ) WHERE rn <= 1000
+        ) AND id NOT IN (
+            SELECT article_id FROM article_user_state
+            WHERE bookmarked = 1 OR read_later = 1 OR in_knowledge = 1
         )",
     )
     .execute(pool)
@@ -344,4 +689,250 @@ pub async fn log_fetch(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::*;
+
+    async fn test_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("create in-memory database");
+        sqlx::query(SCHEMA)
+            .execute(&pool)
+            .await
+            .expect("initialize schema");
+        pool
+    }
+
+    fn raw(native_id: &str, title: &str, summary: &str) -> RawArticle {
+        RawArticle {
+            native_id: native_id.into(),
+            title: title.into(),
+            url: format!("https://example.com/{native_id}"),
+            summary: summary.into(),
+            author: None,
+            hot_score: 1,
+            hot_label: "1".into(),
+            comments_count: None,
+            published_at: 1,
+            thumbnail: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn filters_articles_with_blacklist_and_whitelist() {
+        let pool = test_pool().await;
+        insert_articles(
+            &pool,
+            "test",
+            10,
+            vec![
+                raw("rust", "Rust desktop apps", "Tauri guide"),
+                raw("game", "Weekend games", "Rust game engine"),
+                raw("web", "Web platform", "Browser news"),
+            ],
+        )
+        .await
+        .expect("insert articles");
+
+        let filter = ArticleFilter {
+            blacklist: vec!["game".into()],
+            whitelist: vec!["rust".into()],
+        };
+        let articles = get_articles(&pool, None, 100, 0, Some(&filter))
+            .await
+            .expect("query articles");
+
+        assert_eq!(articles.len(), 1);
+        assert_eq!(articles[0].id, "test:rust");
+    }
+
+    #[tokio::test]
+    async fn repairs_legacy_zhihu_api_urls_without_replacing_articles() {
+        let pool = test_pool().await;
+        let mut article = raw("123456789", "知乎问题", "问题摘要");
+        article.url = "https://api.zhihu.com/questions/123456789".into();
+        insert_articles(&pool, "zhihu", 100, vec![article])
+            .await
+            .expect("insert legacy article");
+
+        assert_eq!(repair_legacy_article_urls(&pool).await.unwrap(), 1);
+        let row = sqlx::query("SELECT id, url FROM articles WHERE id = 'zhihu:123456789'")
+            .fetch_one(&pool)
+            .await
+            .expect("repaired article remains");
+        assert_eq!(row.get::<String, _>("id"), "zhihu:123456789");
+        assert_eq!(
+            row.get::<String, _>("url"),
+            "https://www.zhihu.com/question/123456789"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_treats_user_input_as_literal_terms() {
+        let pool = test_pool().await;
+        insert_articles(
+            &pool,
+            "test",
+            10,
+            vec![raw("cpp", "Modern C++ patterns", "A practical guide")],
+        )
+        .await
+        .expect("insert articles");
+
+        let articles = search_articles(&pool, "C++", None)
+            .await
+            .expect("search articles");
+
+        assert_eq!(articles.len(), 1);
+        assert_eq!(articles[0].id, "test:cpp");
+    }
+
+    #[tokio::test]
+    async fn persists_article_flags_and_protects_saved_articles_from_cleanup() {
+        let pool = test_pool().await;
+        insert_articles(
+            &pool,
+            "test",
+            10,
+            vec![raw("saved", "Saved article", "Keep this article")],
+        )
+        .await
+        .expect("insert article");
+
+        set_article_flag(&pool, "test:saved", "is_bookmarked", true)
+            .await
+            .expect("bookmark article");
+        set_article_flag(&pool, "test:saved", "is_read_later", true)
+            .await
+            .expect("save for later");
+        cleanup_old(&pool).await.expect("cleanup articles");
+
+        let article = get_article_by_id(&pool, "test:saved")
+            .await
+            .expect("query article")
+            .expect("saved article remains");
+        assert!(article.is_bookmarked);
+        assert!(article.is_read_later);
+        assert!(!article.in_knowledge);
+    }
+
+    #[tokio::test]
+    async fn counts_only_explicit_article_views() {
+        let pool = test_pool().await;
+        insert_articles(
+            &pool,
+            "test",
+            10,
+            vec![
+                raw("manual-read", "Manual read state", "No view recorded"),
+                raw("opened", "Opened article", "One view recorded"),
+            ],
+        )
+        .await
+        .expect("insert articles");
+
+        mark_read(&pool, "test:manual-read")
+            .await
+            .expect("mark article read");
+        let manual_read = get_article_by_id(&pool, "test:manual-read")
+            .await
+            .expect("query manually read article")
+            .expect("manually read article exists");
+        let manual_analytics = get_article_analytics(&pool, "test:manual-read")
+            .await
+            .expect("query manually read analytics");
+        assert!(manual_read.is_read);
+        assert_eq!(manual_analytics.view_count, None);
+
+        record_article_view(&pool, "test:opened")
+            .await
+            .expect("record explicit article view");
+        mark_read(&pool, "test:opened")
+            .await
+            .expect("repeat read-state update");
+        let opened = get_article_by_id(&pool, "test:opened")
+            .await
+            .expect("query opened article")
+            .expect("opened article exists");
+        let opened_analytics = get_article_analytics(&pool, "test:opened")
+            .await
+            .expect("query opened article analytics");
+        assert!(opened.is_read);
+        assert_eq!(opened_analytics.view_count, Some(1));
+    }
+
+    #[tokio::test]
+    async fn stores_insight_note_and_real_analytics() {
+        let pool = test_pool().await;
+        let captured_at = chrono::Utc::now().timestamp();
+        insert_articles(
+            &pool,
+            "test",
+            captured_at,
+            vec![raw("insight", "AI systems", "Production inference")],
+        )
+        .await
+        .expect("insert article");
+        mark_read(&pool, "test:insight").await.expect("mark read");
+        let analytics = get_article_analytics(&pool, "test:insight")
+            .await
+            .expect("read analytics before opening");
+        assert_eq!(analytics.view_count, None);
+        record_article_view(&pool, "test:insight")
+            .await
+            .expect("record article view");
+        save_article_note(&pool, "test:insight", "Review", "A durable note")
+            .await
+            .expect("save note");
+        let insight = ArticleInsight {
+            status: "accepted".into(),
+            summary: "A verified summary".into(),
+            key_points: vec!["Reliable output".into()],
+            impact_analysis: "Useful for production".into(),
+            technologies: vec!["Rust".into(), "SQLite".into()],
+            related_reading: vec![RelatedReading {
+                title: "Reference".into(),
+                url: Some("https://example.com/reference".into()),
+            }],
+            score: Some(8.5),
+            error: None,
+            updated_at: Some(captured_at),
+        };
+        save_article_insight(&pool, "test:insight", &insight)
+            .await
+            .expect("save insight");
+
+        let article = get_article_by_id(&pool, "test:insight")
+            .await
+            .expect("query article")
+            .expect("article exists");
+        assert_eq!(article.ai_status.as_deref(), Some("accepted"));
+        assert_eq!(article.ai_summary.as_deref(), Some("A verified summary"));
+        assert_eq!(article.ai_score, Some(8.5));
+
+        let analytics = get_article_analytics(&pool, "test:insight")
+            .await
+            .expect("query analytics");
+        assert_eq!(analytics.view_count, Some(1));
+        assert_eq!(analytics.ai_score, Some(8.5));
+        assert_eq!(analytics.trend.len(), 1);
+        assert_eq!(analytics.keywords.len(), 2);
+    }
+
+    #[test]
+    fn builds_safe_fts_query_for_quotes_and_spaces() {
+        assert_eq!(build_fts_query("rust tauri"), "\"rust\" AND \"tauri\"");
+        assert_eq!(
+            build_fts_query("say \"hello\""),
+            "\"say\" AND \"\"\"hello\"\"\""
+        );
+        assert_eq!(build_fts_query("   "), "");
+    }
 }

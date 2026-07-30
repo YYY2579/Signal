@@ -28,9 +28,6 @@ impl SourceFetcher for HackerNews {
     fn id(&self) -> &'static str {
         "hackernews"
     }
-    fn name(&self) -> &'static str {
-        "Hacker News"
-    }
 
     async fn fetch_hot(&self, client: &reqwest::Client) -> FetchResult<Vec<RawArticle>> {
         let ids: Vec<u64> = client

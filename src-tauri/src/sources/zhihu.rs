@@ -27,8 +27,6 @@ struct HotItem {
 struct Target {
     title: String,
     excerpt: String,
-    #[serde(default)]
-    url: Option<String>,
     id: u64,
     answer_count: Option<i64>,
 }
@@ -37,9 +35,6 @@ struct Target {
 impl SourceFetcher for Zhihu {
     fn id(&self) -> &'static str {
         "zhihu"
-    }
-    fn name(&self) -> &'static str {
-        "知乎"
     }
 
     async fn fetch_hot(&self, client: &reqwest::Client) -> FetchResult<Vec<RawArticle>> {
@@ -64,13 +59,10 @@ impl SourceFetcher for Zhihu {
         if let Some(items) = hot.data {
             for item in items {
                 let hot_score = parse_hot_score(&item.detail_text);
-                let url = item.target.url.unwrap_or_else(|| {
-                    format!("https://www.zhihu.com/question/{}", item.target.id)
-                });
                 articles.push(RawArticle {
                     native_id: item.target.id.to_string(),
                     title: item.target.title,
-                    url,
+                    url: question_url(item.target.id),
                     summary: item.target.excerpt,
                     author: None,
                     hot_score,
@@ -98,6 +90,10 @@ impl SourceFetcher for Zhihu {
     }
 }
 
+fn question_url(question_id: u64) -> String {
+    format!("https://www.zhihu.com/question/{question_id}")
+}
+
 /// 从 "123 万热度" 提取数字 × 10000
 fn parse_hot_score(detail_text: &str) -> i64 {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -108,4 +104,22 @@ fn parse_hot_score(detail_text: &str) -> i64 {
         }
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_hot_score, question_url};
+
+    #[test]
+    fn builds_browser_question_url() {
+        assert_eq!(
+            question_url(12199984100),
+            "https://www.zhihu.com/question/12199984100"
+        );
+    }
+
+    #[test]
+    fn parses_zhihu_hot_label() {
+        assert_eq!(parse_hot_score("123.4 万热度"), 1_234_000);
+    }
 }

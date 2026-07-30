@@ -24,7 +24,7 @@ pub fn start_scheduler(app: &AppHandle) {
 
     let mut handles = state.scheduler_handles.lock().unwrap();
     for (id, interval) in to_start {
-        let handle = spawn_source_task(app.clone(), id, interval);
+        let handle = spawn_source_task(app.clone(), id.clone(), interval);
         handles.insert(id, handle);
     }
 }
@@ -48,20 +48,23 @@ fn spawn_source_task(
     interval_min: u64,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let interval_min = interval_min.clamp(1, 1440);
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_min * 60));
         loop {
             ticker.tick().await; // 首次立即触发
-            fetch_one_source(&app, &source_id).await;
+            if let Err(error) = fetch_one_source(&app, &source_id).await {
+                tracing::warn!("scheduled fetch {} failed: {}", source_id, error);
+            }
         }
     })
 }
 
 /// 抓取单个源：fetch_hot → 入库 → emit 事件
-pub async fn fetch_one_source(app: &AppHandle, source_id: &str) {
+pub async fn fetch_one_source(app: &AppHandle, source_id: &str) -> Result<usize, String> {
     let state = app.state::<AppState>();
     let source = match state.sources.iter().find(|s| s.id() == source_id) {
         Some(s) => s,
-        None => return,
+        None => return Err(format!("source '{source_id}' not found")),
     };
 
     // 读取配置中的 cookie，构建带 cookie 的 client
@@ -81,9 +84,17 @@ pub async fn fetch_one_source(app: &AppHandle, source_id: &str) {
     match source.fetch_hot(&client).await {
         Ok(raws) => {
             let fetched_at = chrono::Utc::now().timestamp();
-            let new_count = db::insert_articles(&db, source_id, fetched_at, raws)
-                .await
-                .unwrap_or(0);
+            let new_count = match db::insert_articles(&db, source_id, fetched_at, raws).await {
+                Ok(new_count) => new_count,
+                Err(error) => {
+                    let error = error.to_string();
+                    let _ = app.emit(
+                        "refresh-progress",
+                        serde_json::json!({ "source": source_id, "status": "error", "error": error }),
+                    );
+                    return Err(error);
+                }
+            };
             let _ = app.emit(
                 "articles-updated",
                 serde_json::json!({ "source": source_id, "new_count": new_count }),
@@ -92,13 +103,15 @@ pub async fn fetch_one_source(app: &AppHandle, source_id: &str) {
                 "refresh-progress",
                 serde_json::json!({ "source": source_id, "status": "done", "new_count": new_count }),
             );
+            Ok(new_count)
         }
         Err(e) => {
-            tracing::warn!("fetch {} failed: {}", source_id, e);
+            let error = e.to_string();
             let _ = app.emit(
                 "refresh-progress",
-                serde_json::json!({ "source": source_id, "status": "error", "error": e.to_string() }),
+                serde_json::json!({ "source": source_id, "status": "error", "error": error }),
             );
+            Err(error)
         }
     }
 }
