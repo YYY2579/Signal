@@ -41,12 +41,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri/target
+          workspaces: src-tauri -> target
       - run: npm ci
       - name: Frontend lint
         run: npm run lint
@@ -56,10 +56,10 @@ jobs:
         run: cargo fmt --all -- --check
         working-directory: src-tauri
       - name: Rust clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
         working-directory: src-tauri
       - name: Rust tests
-        run: cargo test --all-targets
+        run: cargo test --locked --all-targets
         working-directory: src-tauri
 
   build-verify:
@@ -102,12 +102,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri/target
+          workspaces: src-tauri -> target
       - run: npm ci
       - name: Build verify (no bundle)
-        run: npm run tauri -- build --target ${{ matrix.target }} --no-bundle
+        run: npm run tauri -- build --target ${{ matrix.target }} --no-bundle -- --locked
