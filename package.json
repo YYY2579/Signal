@@ -2,6 +2,12 @@
   "name": "signal",
   "private": true,
   "version": "0.1.0",
+  "description": "本地优先的个人 AI 信息情报桌面应用",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YYY2579/Signal.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,15 +17,16 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-sql": "^2",
     "@tauri-apps/plugin-store": "^2",
-    "@tanstack/react-virtual": "^3",
     "class-variance-authority": "^0.7",
     "clsx": "^2",
     "date-fns": "^3",
     "dompurify": "^3",
+    "framer-motion": "^12.43.0",
     "lucide-react": "^0.456.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
@@ -28,6 +35,7 @@
     "zustand": "^4"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2",
     "@types/dompurify": "^3",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
@@ -36,7 +44,6 @@
     "postcss": "^8",
     "tailwindcss": "^3.4",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4",
-    "@tauri-apps/cli": "^2"
+    "vite": "^7.0.4"
   }
 }

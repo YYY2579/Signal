@@ -8,6 +8,8 @@ export function cn(...inputs: ClassValue[]) {
 
 /** 相对时间格式化（如 "3小时前"） */
 export function formatRelativeTime(timestamp: number): string {
+  if (timestamp <= 0) return "时间未知";
+
   const now = Date.now();
   const diff = now - timestamp * 1000;
   const minutes = Math.floor(diff / 60000);
