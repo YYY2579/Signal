@@ -6,7 +6,7 @@
 
 - Node.js 22，与 CI 使用的主版本一致
 - npm，使用仓库中的 `package-lock.json`
-- Rust stable，以及 `rustfmt`、`clippy`
+- rustup；仓库通过 `rust-toolchain.toml` 固定 Rust 1.97.1、`rustfmt` 和 `clippy`
 - [Tauri 2 对应平台的系统依赖](https://tauri.app/start/prerequisites/)
 
 CI 在 Ubuntu 上额外安装 WebKitGTK、OpenSSL、AppIndicator 和 librsvg 开发包。正式发布矩阵包含 Windows x64、macOS Intel、macOS Apple Silicon 和 Linux x64。
@@ -28,8 +28,8 @@ npm run tauri -- dev
 npm run lint
 npm run build
 cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets
 ```
 
 `npm run lint` 当前执行 TypeScript `tsc --noEmit`，不是 ESLint。Rust 测试使用本地 fixture 和临时数据库，AI 协议测试不会调用付费云服务。来源接口是否仍可访问需要在桌面应用中手动刷新验证。
@@ -37,7 +37,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 ## 构建本机安装包
 
 ```bash
-npm run tauri -- build
+npm run tauri -- build -- --locked
 ```
 
 Tauri 会先运行 `npm run build`，再为当前主机生成可用的 bundle。跨平台发布由 GitHub Actions 的目标矩阵完成，不应假设一台开发机能直接生成所有平台安装包。
@@ -63,7 +63,7 @@ git tag -a v0.1.0 -m "Signal v0.1.0"
 git push origin v0.1.0
 ```
 
-`.github/workflows/release.yml` 会验证标签与三个项目版本一致，为四个平台构建安装包，统一资产名称，生成 `SHA256SUMS`，并在所有构建成功后发布 GitHub Release。任一平台失败时不会发布半成品版本。
+`.github/workflows/release.yml` 会确认标签提交属于 `main`，复跑发布卫生、前端与 Rust 检查，验证标签与三个项目版本一致，再为四个平台构建安装包、统一资产名称并生成 `SHA256SUMS`。只有全部检查和四个平台构建都成功后才会发布 GitHub Release；任一环节失败时不会发布半成品版本。
 
 当前工作流没有代码签名或公证步骤。发布前至少应在每个平台完成安装、首次启动、默认来源同步、本地搜索、文章打开和设置持久化测试。使用真实 AI 服务的验证需要维护者自行提供凭据，凭据不得写入仓库或 CI 日志。
 

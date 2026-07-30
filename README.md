@@ -17,7 +17,7 @@ Signal 是一个本地优先的个人 AI 信息情报桌面应用。它把技术
 
 ### 方式二：从源码启动
 
-先安装 Node.js 22、Rust stable 和 [Tauri 2 系统依赖](https://tauri.app/start/prerequisites/)，然后运行：
+先安装 Node.js 22、rustup 和 [Tauri 2 系统依赖](https://tauri.app/start/prerequisites/)。仓库中的 `rust-toolchain.toml` 会自动选择 Rust 1.97.1，然后运行：
 
 ```bash
 npm ci
