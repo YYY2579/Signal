@@ -1,6 +1,6 @@
 [package]
 name = "signal"
-version = "0.1.0"
+version = "0.1.1"
 description = "本地优先的个人 AI 信息情报桌面应用"
 authors = ["yyy"]
 edition = "2021"

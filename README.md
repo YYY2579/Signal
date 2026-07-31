@@ -2,7 +2,7 @@
 
 Signal 是一个本地优先的个人 AI 信息情报桌面应用。它把技术社区、项目趋势和官方博客聚合到同一工作区，并提供全文搜索、稍后阅读、知识库、笔记、AI 搜索和文章洞察。
 
-当前版本为 `0.1.0`。发布工作流为 Windows x64、macOS Intel、macOS Apple Silicon 和 Linux x64 生成安装包与 SHA-256 校验文件；如果 [GitHub Releases](https://github.com/YYY2579/Signal/releases) 暂无可用版本，请按下文从源码运行。
+当前版本为 `0.1.1`。发布工作流为 Windows x64、macOS Intel、macOS Apple Silicon 和 Linux x64 生成安装包与 SHA-256 校验文件；如果 [GitHub Releases](https://github.com/YYY2579/Signal/releases) 暂无可用版本，请按下文从源码运行。
 
 ## 快速上手
 
