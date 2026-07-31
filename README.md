@@ -2,7 +2,7 @@
 
 Signal 是一个本地优先的个人 AI 信息情报桌面应用。它把技术社区、项目趋势和官方博客聚合到同一工作区，并提供全文搜索、稍后阅读、知识库、笔记、AI 搜索和文章洞察。
 
-当前版本为 `0.1.2`。发布工作流为 Windows x64、macOS Intel、macOS Apple Silicon 和 Linux x64 生成安装包与 SHA-256 校验文件；如果 [GitHub Releases](https://github.com/YYY2579/Signal/releases) 暂无可用版本，请按下文从源码运行。
+当前版本为 `0.1.3`。发布工作流为 Windows x64、macOS Intel、macOS Apple Silicon 和 Linux x64 生成安装包与 SHA-256 校验文件；如果 [GitHub Releases](https://github.com/YYY2579/Signal/releases) 暂无可用版本，请按下文从源码运行。
 
 ## 快速上手
 
@@ -40,7 +40,7 @@ Vite 的浏览器预览不能调用 Tauri 后端；数据同步、本地数据�
 - 九个已注册来源：Hacker News、GitHub Trending、V2EX、掘金、知乎热榜、CSDN 热榜、力扣讨论、Reddit `r/programming`、Rust 官方博客
 - 首页、最近三天 Top20 热门话题、我的订阅、AI 摘要、稍后阅读和收藏知识库工作区
 - 可调整标题列表宽度的三栏阅读布局、明暗主题和中英文工作区导航
-- 用户自定义 RSS/Atom 来源，包含格式验证、平台识别、定时同步和删除
+- 用户自定义 RSS/Atom 来源，包含常用技术社区预设、格式验证、平台识别、定时同步和删除
 - SQLite FTS5 本地全文搜索、关键词黑白名单、已读状态、收藏、稍后阅读、知识库和笔记
 - 按需正文缓存、热度快照和基于本地数据的文章分析视图
 - OpenAI Chat Completions 兼容协议、Anthropic Messages、Gemini `generateContent`、Ollama 原生 `/api/chat`

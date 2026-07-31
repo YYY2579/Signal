@@ -365,15 +365,42 @@ pub async fn remove_custom_source(
 }
 
 fn detect_feed_platform(host: &str) -> (&'static str, &'static str) {
-    if host.contains("github.com") {
+    fn is_domain(host: &str, domain: &str) -> bool {
+        host == domain
+            || host
+                .strip_suffix(domain)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    }
+
+    if is_domain(host, "github.com") {
         ("github", "github")
-    } else if host.contains("zhihu.com") {
+    } else if is_domain(host, "segmentfault.com") {
+        ("segmentfault", "segmentfault")
+    } else if is_domain(host, "oschina.net") {
+        ("oschina", "oschina")
+    } else if is_domain(host, "cnblogs.com") {
+        ("cnblogs", "cnblogs")
+    } else if is_domain(host, "ruby-china.org") {
+        ("rubychina", "rubychina")
+    } else if is_domain(host, "infoq.cn") {
+        ("infoq", "infoq")
+    } else if is_domain(host, "dev.to") {
+        ("devto", "devto")
+    } else if is_domain(host, "lobste.rs") {
+        ("lobsters", "lobsters")
+    } else if is_domain(host, "rust-lang.org") {
+        ("rust", "rust")
+    } else if is_domain(host, "python.org") {
+        ("python", "python")
+    } else if is_domain(host, "golangbridge.org") {
+        ("golang", "golang")
+    } else if is_domain(host, "zhihu.com") {
         ("zhihu", "zhihu")
-    } else if host.contains("csdn.net") {
+    } else if is_domain(host, "csdn.net") {
         ("csdn", "csdn")
-    } else if host.contains("juejin.cn") {
+    } else if is_domain(host, "juejin.cn") {
         ("juejin", "juejin")
-    } else if host.contains("medium.com") {
+    } else if is_domain(host, "medium.com") {
         ("medium", "medium")
     } else {
         ("rss", "rss")
@@ -1132,6 +1159,22 @@ mod tests {
     #[test]
     fn detects_known_feed_platform_and_falls_back_to_rss() {
         assert_eq!(detect_feed_platform("github.com"), ("github", "github"));
+        assert_eq!(
+            detect_feed_platform("segmentfault.com"),
+            ("segmentfault", "segmentfault")
+        );
+        assert_eq!(
+            detect_feed_platform("users.rust-lang.org"),
+            ("rust", "rust")
+        );
+        assert_eq!(
+            detect_feed_platform("discuss.python.org"),
+            ("python", "python")
+        );
+        assert_eq!(
+            detect_feed_platform("segmentfault.com.example.com"),
+            ("rss", "rss")
+        );
         assert_eq!(detect_feed_platform("example.com"), ("rss", "rss"));
     }
 

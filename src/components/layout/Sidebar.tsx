@@ -186,10 +186,23 @@ export function Sidebar() {
 function SourceMark({ source }: { source: SourceConfig }) {
   const brand = source.icon ?? source.platform ?? source.id;
   if (brand === "github") return <Github className="h-3.5 w-3.5" aria-hidden="true" />;
-  if (brand === "rss" || source.feed_url) {
+  if (brand === "rss") {
     return <Rss className="h-3.5 w-3.5" aria-hidden="true" />;
   }
   if (brand === "hackernews") return <>Y</>;
+  const marks: Record<string, string> = {
+    segmentfault: "SF",
+    oschina: "OS",
+    cnblogs: "CN",
+    rubychina: "RB",
+    infoq: "IQ",
+    devto: "DV",
+    lobsters: "LB",
+    rust: "RS",
+    python: "PY",
+    golang: "GO",
+  };
+  if (marks[brand]) return <>{marks[brand]}</>;
   return <>{source.name.slice(0, brand === "csdn" ? 1 : 2).toUpperCase()}</>;
 }
 

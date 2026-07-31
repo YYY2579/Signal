@@ -15,6 +15,7 @@ import {
   KeyRound,
   LoaderCircle,
   Plus,
+  Rss,
   RotateCw,
   Settings2,
   ShieldCheck,
@@ -50,6 +51,47 @@ const settingsNavigation: Array<{
   { id: "ai", label: "AI", icon: Bot },
   { id: "accounts", label: "来源登录", icon: UserRound },
 ];
+
+interface FeedPreset {
+  name: string;
+  url: string;
+}
+
+interface FeedPresetGroup {
+  label: string;
+  sources: readonly FeedPreset[];
+}
+
+const FEED_PRESET_GROUPS: readonly FeedPresetGroup[] = [
+  {
+    label: "中文技术社区",
+    sources: [
+      { name: "SegmentFault 最新问题", url: "https://segmentfault.com/feeds" },
+      { name: "OSCHINA 社区", url: "https://www.oschina.net/news/rss" },
+      { name: "博客园首页", url: "https://feed.cnblogs.com/blog/sitehome/rss" },
+      { name: "Ruby China", url: "https://ruby-china.org/topics/feed" },
+      { name: "InfoQ 中文", url: "https://www.infoq.cn/feed" },
+    ],
+  },
+  {
+    label: "国际技术社区",
+    sources: [
+      { name: "DEV Community", url: "https://dev.to/feed" },
+      { name: "Lobsters", url: "https://lobste.rs/rss" },
+    ],
+  },
+  {
+    label: "语言与开发者论坛",
+    sources: [
+      { name: "Rust Users Forum", url: "https://users.rust-lang.org/latest.rss" },
+      { name: "Rust Internals", url: "https://internals.rust-lang.org/latest.rss" },
+      { name: "Python Discussions", url: "https://discuss.python.org/latest.rss" },
+      { name: "Go Forum", url: "https://forum.golangbridge.org/latest.rss" },
+    ],
+  },
+] as const;
+
+const FEED_PRESETS = FEED_PRESET_GROUPS.flatMap((group) => group.sources);
 
 export function SettingsDialog() {
   const open = useSettingsStore((state) => state.settingsOpen);
@@ -251,6 +293,7 @@ function SourcesSection() {
   const [intervalDrafts, setIntervalDrafts] = useState<Record<string, string>>({});
   const [customName, setCustomName] = useState("");
   const [customUrl, setCustomUrl] = useState("");
+  const [selectedPresetUrl, setSelectedPresetUrl] = useState("");
   const [adding, setAdding] = useState(false);
 
   useEffect(() => {
@@ -298,10 +341,6 @@ function SourcesSection() {
     );
   }
 
-  if (sources.length === 0) {
-    return <EmptySettingsState icon={Database} label="暂无可配置的数据源" />;
-  }
-
   return (
     <div className="space-y-3">
       <form
@@ -314,6 +353,7 @@ function SourcesSection() {
             await addSource(customName, customUrl);
             setCustomName("");
             setCustomUrl("");
+            setSelectedPresetUrl("");
           } catch (cause) {
             setError(cause instanceof Error ? cause.message : "添加 Feed 失败");
           } finally {
@@ -327,12 +367,49 @@ function SourcesSection() {
             系统会验证 Feed 格式并识别平台；普通网页暂不支持。
           </p>
         </div>
+        <label className="mb-2 flex items-center gap-2 text-[11px] font-medium text-muted">
+          <span className="flex shrink-0 items-center gap-1.5">
+            <Rss className="h-3.5 w-3.5 text-accent" />
+            常用技术社区
+          </span>
+          <select
+            value={selectedPresetUrl}
+            onChange={(event) => {
+              const url = event.currentTarget.value;
+              setSelectedPresetUrl(url);
+              const preset = FEED_PRESETS.find((item) => item.url === url);
+              if (!preset) return;
+              setCustomName(preset.name);
+              setCustomUrl(preset.url);
+              setError(null);
+            }}
+            className="h-9 min-w-0 flex-1 rounded-btn border border-line bg-white px-2.5 text-[11px] text-ink-2 outline-none focus:border-indigo-300"
+            aria-label="选择常用技术社区 Feed"
+          >
+            <option value="">选择 RSS / Atom 预设...</option>
+            {FEED_PRESET_GROUPS.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.sources.map((preset) => {
+                  const added = sources.some((source) => source.feed_url === preset.url);
+                  return (
+                    <option key={preset.url} value={preset.url} disabled={added}>
+                      {preset.name}{added ? "（已添加）" : ""}
+                    </option>
+                  );
+                })}
+              </optgroup>
+            ))}
+          </select>
+        </label>
         <div className="grid grid-cols-[minmax(100px,0.7fr)_minmax(180px,1.3fr)_auto] gap-2">
           <input
             required
             maxLength={60}
             value={customName}
-            onChange={(event) => setCustomName(event.target.value)}
+            onChange={(event) => {
+              setCustomName(event.target.value);
+              setSelectedPresetUrl("");
+            }}
             placeholder="来源名称"
             aria-label="自定义来源名称"
             className="h-9 min-w-0 rounded-btn border border-line bg-white px-2.5 text-[11px] outline-none focus:border-indigo-300"
@@ -341,7 +418,10 @@ function SourcesSection() {
             required
             type="url"
             value={customUrl}
-            onChange={(event) => setCustomUrl(event.target.value)}
+            onChange={(event) => {
+              setCustomUrl(event.target.value);
+              setSelectedPresetUrl("");
+            }}
             placeholder="https://example.com/feed.xml"
             aria-label="RSS 或 Atom 链接"
             className="h-9 min-w-0 rounded-btn border border-line bg-white px-2.5 text-[11px] outline-none focus:border-indigo-300"
@@ -360,84 +440,88 @@ function SourcesSection() {
           </button>
         </div>
       </form>
-      <div className="overflow-hidden rounded-btn border border-line">
-        {sources.map((source, index) => (
-          <div
-            key={source.id}
-            className={cn(
-              "flex min-h-14 items-center gap-3 px-3",
-              index > 0 && "border-t border-line",
-            )}
-          >
-            <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-ink-2">
-              {source.name}
-            </span>
-            <label className="flex items-center gap-1.5 text-[11px] text-faint">
-              <span>间隔</span>
-              <input
-                type="number"
-                aria-label={`${source.name}同步间隔`}
-                value={intervalDrafts[source.id] ?? String(source.interval_minutes)}
+      {sources.length === 0 ? (
+        <EmptySettingsState icon={Database} label="暂无已添加的数据源" />
+      ) : (
+        <div className="overflow-hidden rounded-btn border border-line">
+          {sources.map((source, index) => (
+            <div
+              key={source.id}
+              className={cn(
+                "flex min-h-14 items-center gap-3 px-3",
+                index > 0 && "border-t border-line",
+              )}
+            >
+              <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-ink-2">
+                {source.name}
+              </span>
+              <label className="flex items-center gap-1.5 text-[11px] text-faint">
+                <span>间隔</span>
+                <input
+                  type="number"
+                  aria-label={`${source.name}同步间隔`}
+                  value={intervalDrafts[source.id] ?? String(source.interval_minutes)}
+                  disabled={pendingSource === source.id}
+                  onChange={(event) =>
+                    setIntervalDrafts((current) => ({
+                      ...current,
+                      [source.id]: event.target.value,
+                    }))
+                  }
+                  onBlur={(event) => {
+                    const minutes = Math.max(1, Number(event.currentTarget.value) || 1);
+                    setIntervalDrafts((current) => ({
+                      ...current,
+                      [source.id]: String(minutes),
+                    }));
+                    if (minutes === source.interval_minutes) return;
+                    void saveSource(() => updateInterval(source.id, minutes), source.id);
+                  }}
+                  className="h-8 w-16 rounded-md border border-line px-2 text-[11px] text-ink-2 outline-none focus:border-indigo-300 disabled:bg-panel disabled:opacity-60"
+                  min={1}
+                />
+                <span>分钟</span>
+              </label>
+              <SourceToggle
+                label="订阅"
+                checked={source.subscribed}
                 disabled={pendingSource === source.id}
-                onChange={(event) =>
-                  setIntervalDrafts((current) => ({
-                    ...current,
-                    [source.id]: event.target.value,
-                  }))
+                ariaLabel={`${source.subscribed ? "取消订阅" : "订阅"}${source.name}`}
+                onClick={() =>
+                  void saveSource(
+                    () => toggleSubscription(source.id, !source.subscribed),
+                    source.id,
+                  )
                 }
-                onBlur={(event) => {
-                  const minutes = Math.max(1, Number(event.currentTarget.value) || 1);
-                  setIntervalDrafts((current) => ({
-                    ...current,
-                    [source.id]: String(minutes),
-                  }));
-                  if (minutes === source.interval_minutes) return;
-                  void saveSource(() => updateInterval(source.id, minutes), source.id);
-                }}
-                className="h-8 w-16 rounded-md border border-line px-2 text-[11px] text-ink-2 outline-none focus:border-indigo-300 disabled:bg-panel disabled:opacity-60"
-                min={1}
               />
-              <span>分钟</span>
-            </label>
-            <SourceToggle
-              label="订阅"
-              checked={source.subscribed}
-              disabled={pendingSource === source.id}
-              ariaLabel={`${source.subscribed ? "取消订阅" : "订阅"}${source.name}`}
-              onClick={() =>
-                void saveSource(
-                  () => toggleSubscription(source.id, !source.subscribed),
-                  source.id,
-                )
-              }
-            />
-            {source.id.startsWith("custom_") && source.feed_url && (
-              <button
-                type="button"
-                title={`删除 ${source.name}`}
-                aria-label={`删除 ${source.name}`}
+              {source.id.startsWith("custom_") && source.feed_url && (
+                <button
+                  type="button"
+                  title={`删除 ${source.name}`}
+                  aria-label={`删除 ${source.name}`}
+                  disabled={pendingSource === source.id}
+                  onClick={() => void saveSource(() => removeSource(source.id), source.id)}
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-faint transition hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )}
+              <SourceToggle
+                label="同步"
+                checked={source.enabled}
                 disabled={pendingSource === source.id}
-                onClick={() => void saveSource(() => removeSource(source.id), source.id)}
-                className="flex h-8 w-8 items-center justify-center rounded-md text-faint transition hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            )}
-            <SourceToggle
-              label="同步"
-              checked={source.enabled}
-              disabled={pendingSource === source.id}
-              ariaLabel={`${source.enabled ? "停用" : "启用"}${source.name}`}
-              onClick={() =>
-                void saveSource(
-                  () => toggleSource(source.id, !source.enabled),
-                  source.id,
-                )
-              }
-            />
-          </div>
-        ))}
-      </div>
+                ariaLabel={`${source.enabled ? "停用" : "启用"}${source.name}`}
+                onClick={() =>
+                  void saveSource(
+                    () => toggleSource(source.id, !source.enabled),
+                    source.id,
+                  )
+                }
+              />
+            </div>
+          ))}
+        </div>
+      )}
       {error && (
         <p role="alert" className="mt-2 text-[11px] text-red-600">
           {error}

@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-31
+
+### Added
+
+- 新增 11 个分组技术社区 RSS/Atom 预设，覆盖中文社区、国际社区和语言开发者论坛。
+- 新增 SegmentFault、OSCHINA、博客园、Ruby China、InfoQ、DEV、Lobsters、Rust、Python 和 Go Feed 的来源标识与配色。
+
+### Changed
+
+- 数据源为空时仍保留 RSS/Atom 添加入口；选择预设只填入名称和 URL，提交时继续执行真实 Feed 校验。
+- 已添加的预设会在选择列表中禁用，手动修改名称或 URL 后自动退出预设状态。
+
 ## [0.1.2] - 2026-07-31
 
 ### Added

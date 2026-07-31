@@ -140,6 +140,17 @@ export const SOURCE_COLORS: Record<string, string> = {
   reddit: "#ff4500",
   rustblog: "#111827",
   producthunt: "#da552f",
+  rss: "#64748b",
+  segmentfault: "#009a61",
+  oschina: "#21b351",
+  cnblogs: "#2563eb",
+  rubychina: "#b91c1c",
+  infoq: "#ef4444",
+  devto: "#111827",
+  lobsters: "#ac130d",
+  rust: "#b7410e",
+  python: "#3776ab",
+  golang: "#00add8",
 };
 
 /** 数据源显示名 */
