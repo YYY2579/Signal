@@ -1,7 +1,7 @@
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
-use crate::models::{default_source_configs, AppConfig};
+use crate::models::{default_source_configs, AppConfig, LoginConfig};
 
 const STORE_FILE: &str = "settings.json";
 const KEY: &str = "config";
@@ -11,11 +11,57 @@ pub fn load_config(app: &AppHandle) -> AppConfig {
     let Ok(store) = app.store(STORE_FILE) else {
         return AppConfig::default();
     };
-    let config = store
+    let config: AppConfig = store
         .get(KEY)
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
-    normalize_config(config)
+    let legacy_login = config.login.clone();
+    let mut config = normalize_config(config);
+    let secure_login = load_login();
+    config.login = LoginConfig {
+        juejin: secure_login.juejin.or(legacy_login.juejin),
+        zhihu: secure_login.zhihu.or(legacy_login.zhihu),
+    };
+    if config.login.juejin.is_some() || config.login.zhihu.is_some() {
+        let _ = save_login(&config.login);
+        // Never leave migrated cookies in the plaintext settings store, even when
+        // the operating-system credential service is temporarily unavailable.
+        let _ = save_config(app, &config);
+    }
+    config
+}
+
+const LOGIN_SERVICE: &str = "Signal.source-login";
+
+fn load_login() -> LoginConfig {
+    LoginConfig {
+        juejin: keyring::Entry::new(LOGIN_SERVICE, "juejin")
+            .ok()
+            .and_then(|entry| entry.get_password().ok()),
+        zhihu: keyring::Entry::new(LOGIN_SERVICE, "zhihu")
+            .ok()
+            .and_then(|entry| entry.get_password().ok()),
+    }
+}
+
+pub fn save_login(login: &LoginConfig) -> Result<(), String> {
+    for (source, value) in [
+        ("juejin", login.juejin.as_deref()),
+        ("zhihu", login.zhihu.as_deref()),
+    ] {
+        let entry = keyring::Entry::new(LOGIN_SERVICE, source).map_err(|e| e.to_string())?;
+        if let Some(cookie) = value.filter(|cookie| !cookie.trim().is_empty()) {
+            entry
+                .set_password(cookie.trim())
+                .map_err(|e| e.to_string())?;
+        } else {
+            match entry.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => (),
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+    }
+    Ok(())
 }
 
 fn normalize_config(mut config: AppConfig) -> AppConfig {
@@ -37,7 +83,9 @@ fn normalize_config(mut config: AppConfig) -> AppConfig {
 /// 保存应用配置
 pub fn save_config(app: &AppHandle, config: &AppConfig) -> Result<(), String> {
     let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
-    let value = serde_json::to_value(config).map_err(|e| e.to_string())?;
+    let mut persisted = config.clone();
+    persisted.login = LoginConfig::default();
+    let value = serde_json::to_value(persisted).map_err(|e| e.to_string())?;
     store.set(KEY, value);
     store.save().map_err(|e| e.to_string())?;
     Ok(())
@@ -57,6 +105,9 @@ mod tests {
                 enabled: false,
                 subscribed: false,
                 interval_minutes: 75,
+                feed_url: None,
+                platform: None,
+                icon: None,
             }],
             ..AppConfig::default()
         };

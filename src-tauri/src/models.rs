@@ -54,19 +54,26 @@ impl RawArticle {
     /// 映射为统一 Article（source + fetched_at 由调用方提供）
     pub fn into_article(self, source: &str, fetched_at: i64) -> Article {
         let id = format!("{}:{}", source, self.native_id);
+        let summary = extractive_summary(&self.title, &self.summary, 360);
         Article {
             id,
             source: source.to_string(),
             native_id: self.native_id,
             title: self.title,
             url: self.url,
-            summary: self.summary,
+            summary,
             content: None,
             author: self.author,
             hot_score: self.hot_score,
             hot_label: self.hot_label,
             comments_count: self.comments_count,
-            published_at: self.published_at,
+            // Some hot-list APIs omit publication time. Use the observed time so the UI
+            // remains useful without inventing an old date; adapters should still prefer source time.
+            published_at: if self.published_at > 0 {
+                self.published_at
+            } else {
+                fetched_at
+            },
             fetched_at,
             thumbnail: self.thumbnail,
             is_read: false,
@@ -78,6 +85,80 @@ impl RawArticle {
             ai_summary: None,
             ai_score: None,
         }
+    }
+}
+
+fn extractive_summary(title: &str, input: &str, max_chars: usize) -> String {
+    let normalized = input.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= max_chars {
+        return normalized;
+    }
+    let title_terms = title
+        .to_lowercase()
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|term| term.chars().count() >= 2)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let mut sentences = Vec::new();
+    let mut start = 0;
+    for (index, character) in normalized.char_indices() {
+        if matches!(character, '.' | '!' | '?' | '。' | '！' | '？' | ';' | '；') {
+            let end = index + character.len_utf8();
+            let sentence = normalized[start..end].trim();
+            if !sentence.is_empty() {
+                sentences.push(sentence);
+            }
+            start = end;
+        }
+    }
+    let tail = normalized[start..].trim();
+    if !tail.is_empty() {
+        sentences.push(tail);
+    }
+    if sentences.len() <= 1 {
+        return truncate_chars(&normalized, max_chars);
+    }
+
+    let lower_sentences = sentences
+        .iter()
+        .map(|sentence| sentence.to_lowercase())
+        .collect::<Vec<_>>();
+    let mut ranked = lower_sentences
+        .iter()
+        .enumerate()
+        .map(|(index, sentence)| {
+            let overlap = title_terms
+                .iter()
+                .filter(|term| sentence.contains(term.as_str()))
+                .count() as i64;
+            (
+                index,
+                overlap * 10 + (sentences.len() - index).min(5) as i64,
+            )
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    let mut selected = ranked
+        .into_iter()
+        .take(3)
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    selected.sort_unstable();
+    let summary = selected
+        .into_iter()
+        .map(|index| sentences[index])
+        .collect::<Vec<_>>()
+        .join(" ");
+    truncate_chars(&summary, max_chars)
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let result = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{}...", result.trim_end())
+    } else {
+        result
     }
 }
 
@@ -186,6 +267,20 @@ pub struct SourceConfig {
     #[serde(default = "default_subscribed")]
     pub subscribed: bool,
     pub interval_minutes: u64,
+    #[serde(default)]
+    pub feed_url: Option<String>,
+    #[serde(default)]
+    pub platform: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrendingTopic {
+    pub title: String,
+    pub keywords: Vec<String>,
+    pub article_count: usize,
+    pub article: Article,
 }
 
 fn default_subscribed() -> bool {
@@ -245,6 +340,9 @@ pub fn default_source_configs() -> Vec<SourceConfig> {
             enabled: true,
             subscribed: true,
             interval_minutes: 30,
+            feed_url: None,
+            platform: None,
+            icon: None,
         },
         SourceConfig {
             id: "github".into(),
@@ -252,6 +350,9 @@ pub fn default_source_configs() -> Vec<SourceConfig> {
             enabled: true,
             subscribed: true,
             interval_minutes: 60,
+            feed_url: None,
+            platform: None,
+            icon: None,
         },
         SourceConfig {
             id: "v2ex".into(),
@@ -259,6 +360,9 @@ pub fn default_source_configs() -> Vec<SourceConfig> {
             enabled: true,
             subscribed: true,
             interval_minutes: 30,
+            feed_url: None,
+            platform: None,
+            icon: None,
         },
         SourceConfig {
             id: "juejin".into(),
@@ -266,6 +370,9 @@ pub fn default_source_configs() -> Vec<SourceConfig> {
             enabled: true,
             subscribed: true,
             interval_minutes: 20,
+            feed_url: None,
+            platform: None,
+            icon: None,
         },
         SourceConfig {
             id: "zhihu".into(),
@@ -273,6 +380,9 @@ pub fn default_source_configs() -> Vec<SourceConfig> {
             enabled: true,
             subscribed: true,
             interval_minutes: 20,
+            feed_url: None,
+            platform: None,
+            icon: None,
         },
         SourceConfig {
             id: "csdn".into(),
@@ -280,6 +390,9 @@ pub fn default_source_configs() -> Vec<SourceConfig> {
             enabled: true,
             subscribed: true,
             interval_minutes: 30,
+            feed_url: None,
+            platform: None,
+            icon: None,
         },
         SourceConfig {
             id: "leetcode".into(),
@@ -287,6 +400,9 @@ pub fn default_source_configs() -> Vec<SourceConfig> {
             enabled: true,
             subscribed: true,
             interval_minutes: 30,
+            feed_url: None,
+            platform: None,
+            icon: None,
         },
         SourceConfig {
             id: "reddit".into(),
@@ -294,6 +410,9 @@ pub fn default_source_configs() -> Vec<SourceConfig> {
             enabled: false,
             subscribed: false,
             interval_minutes: 60,
+            feed_url: None,
+            platform: None,
+            icon: None,
         },
         SourceConfig {
             id: "rustblog".into(),
@@ -301,6 +420,9 @@ pub fn default_source_configs() -> Vec<SourceConfig> {
             enabled: true,
             subscribed: true,
             interval_minutes: 120,
+            feed_url: Some("https://blog.rust-lang.org/feed.xml".into()),
+            platform: Some("rss".into()),
+            icon: Some("rss".into()),
         },
     ]
 }
@@ -316,3 +438,28 @@ pub struct ArticleFilter {
 
 /// 各源未读数
 pub type UnreadCounts = std::collections::HashMap<String, usize>;
+
+#[cfg(test)]
+mod tests {
+    use super::extractive_summary;
+
+    #[test]
+    fn extractive_summary_selects_relevant_sentences_and_stays_bounded() {
+        let filler = "General introduction without the main subject. ".repeat(8);
+        let input = format!(
+            "{filler}Rust improves memory safety for services. More unrelated context. Rust also reduces production crashes. Final appendix details."
+        );
+        let summary = extractive_summary("Rust service reliability", &input, 180);
+        assert!(summary.contains("Rust improves memory safety"));
+        assert!(summary.chars().count() <= 183);
+        assert_ne!(summary, input);
+    }
+
+    #[test]
+    fn extractive_summary_preserves_short_source_abstract() {
+        assert_eq!(
+            extractive_summary("Signal", "A concise source abstract.", 360),
+            "A concise source abstract."
+        );
+    }
+}

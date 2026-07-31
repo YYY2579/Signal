@@ -7,14 +7,14 @@ use crate::models::{Article, RawArticle};
 use super::{FetchResult, SourceFetcher};
 
 pub struct Feed {
-    source_id: &'static str,
+    source_id: String,
     url: String,
 }
 
 impl Feed {
-    pub fn new(source_id: &'static str, url: impl Into<String>) -> Self {
+    pub fn new(source_id: impl Into<String>, url: impl Into<String>) -> Self {
         Self {
-            source_id,
+            source_id: source_id.into(),
             url: url.into(),
         }
     }
@@ -22,8 +22,8 @@ impl Feed {
 
 #[async_trait]
 impl SourceFetcher for Feed {
-    fn id(&self) -> &'static str {
-        self.source_id
+    fn id(&self) -> &str {
+        &self.source_id
     }
 
     async fn fetch_hot(&self, client: &reqwest::Client) -> FetchResult<Vec<RawArticle>> {
@@ -44,14 +44,14 @@ impl SourceFetcher for Feed {
 
     async fn fetch_content(
         &self,
-        _client: &reqwest::Client,
+        client: &reqwest::Client,
         article: &Article,
     ) -> FetchResult<Option<String>> {
-        Ok((!article.summary.trim().is_empty()).then(|| article.summary.clone()))
+        super::fetch_readable_content(client, &article.url).await
     }
 }
 
-fn parse_feed(xml: &str) -> Vec<RawArticle> {
+pub(crate) fn parse_feed(xml: &str) -> Vec<RawArticle> {
     let document = Html::parse_document(xml);
     let entry_selector = selector("entry");
     if document.select(&entry_selector).next().is_some() {

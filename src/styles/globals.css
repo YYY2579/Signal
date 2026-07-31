@@ -45,6 +45,126 @@ input:focus-visible {
   outline-offset: 2px;
 }
 
+.signal-search-input:focus-visible {
+  outline: none;
+}
+
+.signal-search-shell {
+  box-shadow: inset 0 0 0 1px transparent;
+}
+
+.signal-search-shell:focus-within {
+  border-color: rgba(99, 102, 241, 0.34);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.09);
+}
+
+.feed-pane > section {
+  width: var(--signal-feed-width, 560px) !important;
+}
+
+.signal-divider:focus-visible {
+  outline: none;
+}
+
+.signal-divider:focus-visible::after {
+  background: #6366f1;
+}
+
+.signal-divider::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  content: "";
+  background: transparent;
+  transition: background 150ms ease;
+}
+
+.signal-divider:hover::after,
+.signal-divider:active::after {
+  background: rgba(99, 102, 241, 0.5);
+}
+
+.signal-theme-dark {
+  color-scheme: dark;
+}
+
+.signal-theme-dark body,
+body.signal-theme-dark {
+  background: #111318;
+  color: #e5e7eb;
+}
+
+/* Existing components use semantic Tailwind surface classes. Override their tokens here so
+   dark mode applies consistently without duplicating every application component. */
+.signal-theme-dark .bg-bg,
+.signal-theme-dark .bg-white,
+.signal-theme-dark .bg-white\/95,
+.signal-theme-dark .bg-white\/80,
+.signal-theme-dark .bg-white\/60 {
+  background-color: #171a20 !important;
+}
+
+.signal-theme-dark .bg-panel,
+.signal-theme-dark .bg-panel\/70,
+.signal-theme-dark .bg-panel\/60,
+.signal-theme-dark .bg-panel\/50 {
+  background-color: #20242c !important;
+}
+
+.signal-theme-dark .bg-accent-soft,
+.signal-theme-dark .bg-indigo-50,
+.signal-theme-dark .bg-emerald-50,
+.signal-theme-dark .bg-gray-100,
+.signal-theme-dark .bg-gray-200\/70 {
+  background-color: #2a303a !important;
+}
+
+.signal-theme-dark .hover\:bg-white:hover,
+.signal-theme-dark .hover\:bg-white\/80:hover,
+.signal-theme-dark .hover\:bg-gray-100:hover {
+  background-color: #292e37 !important;
+}
+
+.signal-theme-dark .signal-search-shell:focus-within {
+  background-color: #20242c !important;
+  border-color: rgba(129, 140, 248, 0.5);
+  box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.12);
+}
+
+.signal-theme-dark .border-line,
+.signal-theme-dark .border-line\/70,
+.signal-theme-dark .divide-line {
+  border-color: #343a46 !important;
+}
+
+.signal-theme-dark .divide-line > :not([hidden]) ~ :not([hidden]) {
+  border-color: #343a46 !important;
+}
+
+.signal-theme-dark .text-ink,
+.signal-theme-dark .text-ink-2 {
+  color: #f3f4f6 !important;
+}
+
+.signal-theme-dark .text-muted {
+  color: #b6bfcc !important;
+}
+
+.signal-theme-dark .text-faint,
+.signal-theme-dark .placeholder\:text-faint::placeholder {
+  color: #8993a3 !important;
+}
+
+.signal-theme-dark ::selection {
+  background: #3730a3;
+  color: #f5f3ff;
+}
+
+.signal-theme-dark ::-webkit-scrollbar-thumb {
+  background: #4a5361;
+}
+
 /* 自定义滚动条 - 轻薄现代 */
 ::-webkit-scrollbar {
   width: 6px;

@@ -36,6 +36,13 @@ struct HotItem {
     comment_count: String,
     #[serde(default)]
     pic_list: Vec<String>,
+    #[serde(
+        default,
+        alias = "createTime",
+        alias = "postTime",
+        alias = "publishTime"
+    )]
+    created_at: String,
 }
 
 #[async_trait]
@@ -113,7 +120,7 @@ fn map_hot_items(items: Vec<HotItem>) -> Vec<RawArticle> {
                 hot_score,
                 hot_label,
                 comments_count: Some(comments),
-                published_at: 0,
+                published_at: parse_source_timestamp(&item.created_at),
                 thumbnail: item
                     .pic_list
                     .into_iter()
@@ -143,9 +150,36 @@ fn parse_integer(value: &str) -> i64 {
         .unwrap_or(0)
 }
 
+fn parse_source_timestamp(value: &str) -> i64 {
+    let value = value.trim();
+    if value.is_empty() {
+        return 0;
+    }
+    if let Ok(number) = value.parse::<i64>() {
+        return if number > 10_000_000_000 {
+            number / 1000
+        } else {
+            number
+        };
+    }
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|time| time.timestamp())
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{map_hot_items, parse_article_content, HotResponse};
+    use super::{map_hot_items, parse_article_content, parse_source_timestamp, HotResponse};
+
+    #[test]
+    fn parses_seconds_milliseconds_and_rfc3339_timestamps() {
+        assert_eq!(parse_source_timestamp("1785456000"), 1_785_456_000);
+        assert_eq!(parse_source_timestamp("1785456000000"), 1_785_456_000);
+        assert_eq!(
+            parse_source_timestamp("2026-07-31T00:00:00Z"),
+            1_785_456_000
+        );
+    }
 
     #[test]
     fn parses_real_csdn_hot_item() {

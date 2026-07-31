@@ -4,13 +4,15 @@ import {
   Compass,
   Database,
   Flame,
+  Github,
   Home,
   Library,
   Rss,
 } from "lucide-react";
 import type { ComponentType } from "react";
 
-import { SOURCE_COLORS } from "../../lib/types";
+import { SOURCE_COLORS, type SourceConfig } from "../../lib/types";
+import { translate, type MessageKey } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { useArticlesStore } from "../../stores/articlesStore";
 import { useSettingsStore } from "../../stores/settingsStore";
@@ -19,15 +21,15 @@ import { useUiStore, type ActiveView } from "../../stores/uiStore";
 
 const workbenchItems: Array<{
   id: ActiveView;
-  label: string;
+  labelKey: MessageKey;
   icon: ComponentType<{ className?: string }>;
 }> = [
-  { id: "dashboard", label: "首页 Dashboard", icon: Home },
-  { id: "trending", label: "热门趋势", icon: Flame },
-  { id: "subscriptions", label: "我的订阅", icon: Rss },
-  { id: "summary", label: "AI 摘要", icon: Bot },
-  { id: "later", label: "稍后阅读", icon: Bookmark },
-  { id: "knowledge", label: "收藏知识库", icon: Library },
+  { id: "dashboard", labelKey: "sidebar.dashboard", icon: Home },
+  { id: "trending", labelKey: "sidebar.trending", icon: Flame },
+  { id: "subscriptions", labelKey: "sidebar.subscriptions", icon: Rss },
+  { id: "summary", labelKey: "sidebar.summary", icon: Bot },
+  { id: "later", labelKey: "sidebar.later", icon: Bookmark },
+  { id: "knowledge", labelKey: "sidebar.knowledge", icon: Library },
 ];
 
 export function Sidebar() {
@@ -35,13 +37,17 @@ export function Sidebar() {
   const unreadCounts = useSourcesStore((s) => s.unreadCounts);
   const activeSource = useArticlesStore((s) => s.activeSource);
   const setActiveSource = useArticlesStore((s) => s.setActiveSource);
+  const closeReader = useArticlesStore((s) => s.closeReader);
   const openSettings = useSettingsStore((state) => state.openSettings);
   const activeView = useUiStore((state) => state.activeView);
   const setActiveView = useUiStore((state) => state.setActiveView);
   const setSettingsSection = useUiStore((state) => state.setSettingsSection);
+  const locale = useUiStore((state) => state.locale);
+  const t = (key: MessageKey, values?: Record<string, string | number>) => translate(locale, key, values);
   const enabledSourceCount = sources.filter((source) => source.enabled).length;
 
   const selectView = (view: ActiveView) => {
+    closeReader();
     setActiveView(view);
     setActiveSource(null);
   };
@@ -53,17 +59,18 @@ export function Sidebar() {
 
   return (
     <aside className="flex w-[var(--signal-sidebar-width)] shrink-0 flex-col overflow-hidden border-r border-line bg-panel/70 px-2 pb-3 pt-4 min-[1200px]:px-3">
-      <SidebarLabel>工作台</SidebarLabel>
+      <SidebarLabel>{t("sidebar.workbench")}</SidebarLabel>
       <nav className="space-y-0.5">
         {workbenchItems.map((item) => {
           const Icon = item.icon;
+          const label = t(item.labelKey);
           const active = activeView === item.id && activeSource === null;
           return (
             <button
               key={item.id}
               type="button"
-              title={item.label}
-              aria-label={item.label}
+              title={label}
+              aria-label={label}
               aria-current={active ? "page" : undefined}
               onClick={() => selectView(item.id)}
               className={cn(
@@ -77,7 +84,7 @@ export function Sidebar() {
                 <span className="absolute -left-2 top-2 h-6 w-[3px] rounded-r-full bg-blue-600 min-[1200px]:-left-3" />
               )}
               <Icon className="h-5 w-5 shrink-0" />
-              <span className="hidden min-[1200px]:inline">{item.label}</span>
+              <span className="hidden min-[1200px]:inline">{label}</span>
             </button>
           );
         })}
@@ -86,13 +93,13 @@ export function Sidebar() {
       <div className="my-3 h-px bg-line min-[1200px]:my-4" />
 
       <div className="mb-2 flex items-center justify-center px-0 min-[1200px]:justify-between min-[1200px]:px-3">
-        <SidebarLabel className="mb-0">数据源</SidebarLabel>
+        <SidebarLabel className="mb-0">{t("sidebar.sources")}</SidebarLabel>
         <button
           type="button"
           onClick={openSourceSettings}
           className="flex h-7 w-7 items-center justify-center rounded-md text-faint transition hover:bg-white hover:text-ink"
-          title="管理数据源"
-          aria-label="管理数据源"
+          title={t("sidebar.manageSources")}
+          aria-label={t("sidebar.manageSources")}
           aria-haspopup="dialog"
         >
           <Database className="h-3.5 w-3.5" />
@@ -101,17 +108,18 @@ export function Sidebar() {
       <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
         {sources.length === 0 && (
           <div className="hidden px-3 py-4 text-[11px] leading-5 text-faint min-[1200px]:block">
-            尚未连接数据源
+            {t("sidebar.noSources")}
           </div>
         )}
         {sources.map((source) => (
           <button
             key={source.id}
             type="button"
-            title={`查看 ${source.name}`}
-            aria-label={`查看 ${source.name} 的文章`}
+            title={t("sidebar.viewSource", { name: source.name })}
+            aria-label={t("sidebar.viewSourceArticles", { name: source.name })}
             aria-current={activeSource === source.id ? "page" : undefined}
             onClick={() => {
+              closeReader();
               setActiveSource(activeSource === source.id ? null : source.id);
               setActiveView("dashboard");
             }}
@@ -122,19 +130,18 @@ export function Sidebar() {
           >
             <span
               className="relative flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white shadow-sm"
-              style={{ backgroundColor: SOURCE_COLORS[source.id] ?? "#64748b" }}
+              style={{
+                backgroundColor:
+                  SOURCE_COLORS[source.platform ?? source.icon ?? source.id] ?? "#64748b",
+              }}
             >
-              {source.id === "hackernews"
-                ? "Y"
-                : source.id === "github"
-                  ? "GH"
-                  : source.name.slice(0, 1).toUpperCase()}
+              <SourceMark source={source} />
               <span
                 className={cn(
                   "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full border-2 border-panel",
                   source.enabled ? "bg-success" : "bg-gray-300",
                 )}
-                title={source.enabled ? "同步已启用" : "同步已停用"}
+                title={t(source.enabled ? "sidebar.syncEnabled" : "sidebar.syncDisabled")}
               />
             </span>
             <span className="hidden min-w-0 flex-1 truncate text-[13px] font-medium text-ink-2 min-[1200px]:block">
@@ -161,19 +168,29 @@ export function Sidebar() {
         </span>
         <div className="hidden min-w-0 min-[1200px]:block">
           <p className="text-[11px] font-semibold text-ink-2">
-            {enabledSourceCount > 0 ? "数据源已连接" : "等待启用数据源"}
+            {t(enabledSourceCount > 0 ? "sidebar.connected" : "sidebar.waiting")}
           </p>
           <p className="text-[10px] text-faint">
             {enabledSourceCount > 0
-              ? `${enabledSourceCount} 个来源可同步`
+              ? t("sidebar.sourceCount", { count: enabledSourceCount })
               : sources.length > 0
-                ? "打开设置启用来源"
-                : "打开设置完成初始化"}
+                ? t("sidebar.enableSources")
+                : t("sidebar.initialize")}
           </p>
         </div>
       </div>
     </aside>
   );
+}
+
+function SourceMark({ source }: { source: SourceConfig }) {
+  const brand = source.icon ?? source.platform ?? source.id;
+  if (brand === "github") return <Github className="h-3.5 w-3.5" aria-hidden="true" />;
+  if (brand === "rss" || source.feed_url) {
+    return <Rss className="h-3.5 w-3.5" aria-hidden="true" />;
+  }
+  if (brand === "hackernews") return <>Y</>;
+  return <>{source.name.slice(0, brand === "csdn" ? 1 : 2).toUpperCase()}</>;
 }
 
 function SidebarLabel({

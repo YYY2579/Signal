@@ -14,6 +14,8 @@ export type TopBarPanel = "workspace" | "notifications" | "user" | null;
 export type SettingsSection = "general" | "sources" | "filters" | "ai" | "accounts";
 export type AiPanelMode = "search" | "summary";
 export type AiRequestStatus = "idle" | "preparing" | "streaming" | "complete" | "error";
+export type AppTheme = "light" | "dark";
+export type AppLocale = "zh-CN" | "en-US";
 
 export interface WorkspacePreference {
   id: string;
@@ -44,6 +46,9 @@ interface UiState {
   aiRequestStatus: AiRequestStatus;
   aiRequestInput: string;
   aiRequestError: string | null;
+  theme: AppTheme;
+  locale: AppLocale;
+  feedWidth: number;
   setActiveView: (view: ActiveView) => void;
   setSummaryStage: (stage: SummaryStage) => void;
   togglePanel: (panel: Exclude<TopBarPanel, null>) => void;
@@ -61,6 +66,10 @@ interface UiState {
     status: AiRequestStatus,
     update?: { input?: string; error?: string | null },
   ) => void;
+  setTheme: (theme: AppTheme) => void;
+  toggleTheme: () => void;
+  toggleLocale: () => void;
+  setFeedWidth: (width: number) => void;
 }
 
 const defaultWorkspaces: WorkspacePreference[] = [
@@ -91,6 +100,9 @@ export const useUiStore = create<UiState>()(
       aiRequestStatus: "idle",
       aiRequestInput: "",
       aiRequestError: null,
+      theme: "light",
+      locale: "zh-CN",
+      feedWidth: 560,
 
       setActiveView: (activeView) =>
         set({
@@ -169,6 +181,11 @@ export const useUiStore = create<UiState>()(
                 ? state.aiRequestError
                 : null,
         })),
+      setTheme: (theme) => set({ theme }),
+      toggleTheme: () => set((state) => ({ theme: state.theme === "light" ? "dark" : "light" })),
+      toggleLocale: () => set((state) => ({ locale: state.locale === "zh-CN" ? "en-US" : "zh-CN" })),
+      setFeedWidth: (feedWidth) =>
+        set({ feedWidth: Math.round(Math.min(760, Math.max(420, feedWidth))) }),
     }),
     {
       name: "signal-ui-preferences",
@@ -177,6 +194,9 @@ export const useUiStore = create<UiState>()(
         activeView: state.activeView,
         workspaces: state.workspaces,
         activeWorkspaceId: state.activeWorkspaceId,
+        theme: state.theme,
+        locale: state.locale,
+        feedWidth: state.feedWidth,
       }),
     },
   ),

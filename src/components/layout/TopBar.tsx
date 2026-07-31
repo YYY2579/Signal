@@ -4,10 +4,13 @@ import {
   Bot,
   ChevronDown,
   CircleUserRound,
+  Languages,
+  Moon,
   RefreshCw,
   Search,
   Settings,
   Sparkles,
+  Sun,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
@@ -20,6 +23,7 @@ import {
 } from "./TopBarPanels";
 import { Button } from "../ui/button";
 import { isTauriRuntime } from "../../lib/tauri";
+import { translate } from "../../lib/i18n";
 import { useArticlesStore } from "../../stores/articlesStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useUiStore } from "../../stores/uiStore";
@@ -41,14 +45,24 @@ export function TopBar() {
   const setActiveView = useUiStore((state) => state.setActiveView);
   const openAiPanel = useUiStore((state) => state.openAiPanel);
   const addNotification = useUiStore((state) => state.addNotification);
+  const theme = useUiStore((state) => state.theme);
+  const locale = useUiStore((state) => state.locale);
+  const toggleTheme = useUiStore((state) => state.toggleTheme);
+  const toggleLocale = useUiStore((state) => state.toggleLocale);
   const [refreshing, setRefreshing] = useState(false);
   const activeWorkspace =
     workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0];
   const unreadNotifications = notifications.filter((notification) => !notification.read).length;
+  const t = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) =>
+    translate(locale, key, values);
+  const workspaceName =
+    activeWorkspace?.id === "daily-tech" && activeWorkspace.name === "每日技术情报中心"
+      ? t("app.defaultWorkspace")
+      : activeWorkspace?.name ?? t("app.defaultWorkspace");
 
   const handleRefresh = async () => {
     if (!isTauriRuntime()) {
-      toast("数据源同步需要在 Signal 桌面应用中运行");
+      toast(t("sync.desktopOnly"));
       return;
     }
     setRefreshing(true);
@@ -57,19 +71,19 @@ export function TopBar() {
       const loaded = await loadArticles();
       if (!loaded) {
         throw new Error(
-          useArticlesStore.getState().loadError ?? "同步完成，但信息流重新加载失败",
+          useArticlesStore.getState().loadError ?? t("sync.reloadFailed"),
         );
       }
-      toast.success("情报源已同步");
+      toast.success(t("sync.success"));
       addNotification({
-        title: "情报源同步完成",
-        description: "信息流已更新为最新数据",
+        title: t("sync.complete"),
+        description: t("sync.updated"),
         kind: "success",
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(`刷新失败：${message}`);
-      addNotification({ title: "情报源同步失败", description: message, kind: "error" });
+      toast.error(t("sync.failedWithReason", { reason: message }));
+      addNotification({ title: t("sync.failed"), description: message, kind: "error" });
     } finally {
       window.setTimeout(() => setRefreshing(false), 450);
     }
@@ -81,12 +95,9 @@ export function TopBar() {
         <motion.div
           initial={{ scale: 0.86, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
-          className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-[9px] bg-gradient-to-br from-accent to-violet text-white shadow-sm"
+          className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-[9px] shadow-sm"
         >
-          <span className="absolute left-[8px] h-1.5 w-1.5 rounded-full bg-white/90" />
-          <span className="absolute left-[13px] h-3 w-[2px] rounded-full bg-white/90" />
-          <span className="absolute left-[18px] h-[18px] w-[2px] rounded-full bg-white/90" />
-          <span className="absolute left-[23px] h-2.5 w-[2px] rounded-full bg-white/90" />
+          <img src="/signal-icon.png" alt="Signal" className="h-full w-full object-cover" />
         </motion.div>
         <span className="hidden text-[16px] font-bold text-ink min-[1200px]:inline">Signal</span>
       </div>
@@ -94,8 +105,8 @@ export function TopBar() {
       <button
         type="button"
         id="workspace-menu-trigger"
-        title="切换工作区"
-        aria-label="切换工作区"
+        title={t("topbar.workspace")}
+        aria-label={t("topbar.workspace")}
         aria-haspopup="dialog"
         aria-expanded={activePanel === "workspace"}
         aria-controls="workspace-panel"
@@ -105,23 +116,23 @@ export function TopBar() {
         <span className="flex h-6 w-6 items-center justify-center rounded-md bg-indigo-50 text-accent">
           <Bot className="h-3.5 w-3.5" />
         </span>
-        <span className="truncate">{activeWorkspace?.name ?? "每日技术情报中心"}</span>
+        <span className="truncate">{workspaceName}</span>
         <ChevronDown className="ml-auto h-3.5 w-3.5 text-faint" />
       </button>
 
-      <div className="mx-3 flex h-9 min-w-0 flex-1 items-center rounded-field border border-transparent bg-panel px-2.5 transition focus-within:border-indigo-200 focus-within:bg-white focus-within:shadow-sm min-[1200px]:mx-auto min-[1200px]:max-w-[420px]">
+      <div className="signal-search-shell mx-3 flex h-9 min-w-0 flex-1 items-center rounded-field border border-transparent bg-panel px-2.5 transition-colors min-[1200px]:mx-auto min-[1200px]:max-w-[420px]">
         <Search className="h-4 w-4 shrink-0 text-faint" />
         <input
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
-          aria-label="全局搜索"
-          placeholder="搜索新闻、社区、作者、关键词..."
-          className="h-full min-w-0 flex-1 bg-transparent px-2.5 text-[13px] text-ink outline-none placeholder:text-faint"
+          aria-label={t("topbar.globalSearch")}
+          placeholder={t("topbar.search")}
+          className="signal-search-input h-full min-w-0 flex-1 bg-transparent px-2.5 text-[13px] text-ink outline-none placeholder:text-faint"
         />
         <button
           type="button"
-          title="使用 AI 搜索"
-          aria-label="使用 AI 搜索当前输入"
+          title={t("topbar.aiSearch")}
+          aria-label={t("topbar.aiSearch")}
           aria-haspopup="dialog"
           aria-expanded={aiPanelOpen && aiPanelMode === "search"}
           aria-controls="ai-assistant-panel"
@@ -139,8 +150,8 @@ export function TopBar() {
           size="icon"
           onClick={handleRefresh}
           disabled={refreshing}
-          title="刷新"
-          aria-label="刷新"
+          title={t("topbar.refresh")}
+          aria-label={t("topbar.refresh")}
         >
           <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
         </Button>
@@ -151,8 +162,8 @@ export function TopBar() {
             setActiveView("summary");
             openAiPanel("summary");
           }}
-          title="AI 总结"
-          aria-label="AI 总结"
+          title={t("topbar.summary")}
+          aria-label={t("topbar.summary")}
           aria-expanded={aiPanelOpen && aiPanelMode === "summary"}
           aria-controls="ai-assistant-panel"
           className="max-[1099px]:hidden"
@@ -162,8 +173,8 @@ export function TopBar() {
         <Button
           variant="ghost"
           size="icon"
-          title="通知"
-          aria-label={unreadNotifications > 0 ? `通知，${unreadNotifications} 条未读` : "通知"}
+          title={t("topbar.notifications")}
+          aria-label={unreadNotifications > 0 ? `${t("topbar.notifications")}, ${t("topbar.unread", { count: unreadNotifications })}` : t("topbar.notifications")}
           aria-haspopup="dialog"
           aria-expanded={activePanel === "notifications"}
           aria-controls="notifications-panel"
@@ -182,21 +193,40 @@ export function TopBar() {
             setSettingsSection("general");
             openSettings();
           }}
-          title="设置"
-          aria-label="设置"
+          title={t("topbar.settings")}
+          aria-label={t("topbar.settings")}
           aria-haspopup="dialog"
         >
           <Settings className="h-4 w-4" />
         </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={toggleTheme}
+          title={t(theme === "light" ? "topbar.darkTheme" : "topbar.lightTheme")}
+          aria-label={t(theme === "light" ? "topbar.darkTheme" : "topbar.lightTheme")}
+          aria-pressed={theme === "dark"}
+        >
+          {theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={toggleLocale}
+          title={t("topbar.language")}
+          aria-label={t("topbar.language")}
+        >
+          <Languages className="h-4 w-4" />
+        </Button>
         <button
           type="button"
           onClick={() => togglePanel("user")}
-          aria-label="打开本地用户菜单"
+          aria-label={t("topbar.openUser")}
           aria-haspopup="dialog"
           aria-expanded={activePanel === "user"}
           aria-controls="user-panel"
           className="ml-1 flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-slate-700 to-slate-900 text-[11px] font-semibold text-white shadow-sm ring-2 ring-white"
-          title="本地用户"
+          title={t("topbar.user")}
         >
           <CircleUserRound className="h-4 w-4" />
         </button>

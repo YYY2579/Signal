@@ -9,17 +9,18 @@ pub fn start_scheduler(app: &AppHandle) {
     let config = state.config.read().unwrap().clone();
 
     // 收集需要启动的源 (id, interval)
-    let to_start: Vec<(String, u64)> = state
+    let to_start: Vec<(String, u64)> = config
         .sources
         .iter()
-        .filter_map(|s| {
-            let sc = config.sources.iter().find(|c| c.id == s.id())?;
-            if sc.enabled {
-                Some((s.id().to_string(), sc.interval_minutes))
-            } else {
-                None
-            }
+        .filter(|source| {
+            source.feed_url.is_some()
+                || state
+                    .sources
+                    .iter()
+                    .any(|registered| registered.id() == source.id)
         })
+        .filter(|source| source.enabled)
+        .map(|source| (source.id.clone(), source.interval_minutes))
         .collect();
 
     let mut handles = state.scheduler_handles.lock().unwrap();
@@ -62,10 +63,23 @@ fn spawn_source_task(
 /// 抓取单个源：fetch_hot → 入库 → emit 事件
 pub async fn fetch_one_source(app: &AppHandle, source_id: &str) -> Result<usize, String> {
     let state = app.state::<AppState>();
-    let source = match state.sources.iter().find(|s| s.id() == source_id) {
-        Some(s) => s,
-        None => return Err(format!("source '{source_id}' not found")),
-    };
+    let custom_feed = state
+        .config
+        .read()
+        .map_err(|e| e.to_string())?
+        .sources
+        .iter()
+        .find(|source| source.id == source_id)
+        .and_then(|source| source.feed_url.clone())
+        .map(|url| crate::sources::feed::Feed::new(source_id.to_string(), url));
+    let source: &dyn crate::sources::SourceFetcher =
+        if let Some(source) = state.sources.iter().find(|s| s.id() == source_id) {
+            source.as_ref()
+        } else if let Some(ref feed) = custom_feed {
+            feed
+        } else {
+            return Err(format!("source '{source_id}' not found"));
+        };
 
     // 读取配置中的 cookie，构建带 cookie 的 client
     let client = {
@@ -95,6 +109,14 @@ pub async fn fetch_one_source(app: &AppHandle, source_id: &str) -> Result<usize,
                     return Err(error);
                 }
             };
+            db::cleanup_old(&db).await.map_err(|error| {
+                let message = format!("同步完成，但清理过期内容失败: {error}");
+                let _ = app.emit(
+                    "refresh-progress",
+                    serde_json::json!({ "source": source_id, "status": "error", "error": message }),
+                );
+                message
+            })?;
             let _ = app.emit(
                 "articles-updated",
                 serde_json::json!({ "source": source_id, "new_count": new_count }),

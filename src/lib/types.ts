@@ -31,6 +31,16 @@ export interface SourceConfig {
   enabled: boolean;
   subscribed: boolean;
   interval_minutes: number;
+  feed_url?: string | null;
+  platform?: string | null;
+  icon?: string | null;
+}
+
+export interface TrendingTopic {
+  title: string;
+  keywords: string[];
+  article_count: number;
+  article: Article;
 }
 
 export interface FilterConfig {

@@ -97,7 +97,15 @@ impl SourceFetcher for HackerNews {
             .await?
             .json()
             .await?;
-        Ok(item.text)
+        if item
+            .text
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
+        {
+            Ok(item.text)
+        } else {
+            super::fetch_readable_content(client, &article.url).await
+        }
     }
 }
 

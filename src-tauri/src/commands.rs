@@ -9,7 +9,7 @@ use crate::db;
 use crate::models::{
     AiPreferences, AiSearchResponse, AiSettings, AiValidation, AppConfig, Article,
     ArticleAnalytics, ArticleFilter, ArticleInsight, FilterConfig, LoginConfig, SourceConfig,
-    UnreadCounts,
+    TrendingTopic, UnreadCounts,
 };
 use crate::scheduler;
 use crate::state::{build_http_client_with_cookie, get_cookie_for_source, AppState};
@@ -155,7 +155,14 @@ pub async fn refresh_source(
     state: State<'_, AppState>,
     source: String,
 ) -> Result<(), String> {
-    if !state.sources.iter().any(|s| s.id() == source) {
+    let is_custom = state
+        .config
+        .read()
+        .map_err(|e| e.to_string())?
+        .sources
+        .iter()
+        .any(|s| s.id == source && s.feed_url.is_some());
+    if !state.sources.iter().any(|s| s.id() == source) && !is_custom {
         return Err(format!("source '{}' not found", source));
     }
     scheduler::fetch_one_source(&app, &source).await.map(|_| ())
@@ -172,10 +179,11 @@ pub async fn refresh_all(app: AppHandle, state: State<'_, AppState>) -> Result<(
         .iter()
         .filter(|source| source.enabled)
         .filter(|source| {
-            state
-                .sources
-                .iter()
-                .any(|registered| registered.id() == source.id)
+            source.feed_url.is_some()
+                || state
+                    .sources
+                    .iter()
+                    .any(|registered| registered.id() == source.id)
         })
         .map(|source| source.id.clone())
         .collect();
@@ -211,11 +219,23 @@ pub async fn get_article_content(
         .await
         .map_err(|e| e.to_string())?
         .ok_or("article not found")?;
-    let source = state
+    let custom_feed = state
+        .config
+        .read()
+        .map_err(|e| e.to_string())?
         .sources
         .iter()
-        .find(|s| s.id() == article.source)
-        .ok_or("source not found")?;
+        .find(|source| source.id == article.source)
+        .and_then(|source| source.feed_url.clone())
+        .map(|url| crate::sources::feed::Feed::new(article.source.clone(), url));
+    let source: &dyn crate::sources::SourceFetcher =
+        if let Some(source) = state.sources.iter().find(|s| s.id() == article.source) {
+            source.as_ref()
+        } else if let Some(ref feed) = custom_feed {
+            feed
+        } else {
+            return Err("source not found".into());
+        };
     // 按源构建带 cookie 的 client
     let client = {
         let config = state.config.read().unwrap();
@@ -240,20 +260,295 @@ pub async fn get_article_content(
 /// 数据源配置列表
 #[tauri::command]
 pub async fn get_sources(state: State<'_, AppState>) -> Result<Vec<SourceConfig>, String> {
-    let registered = state
-        .sources
-        .iter()
-        .map(|source| source.id())
-        .collect::<std::collections::HashSet<_>>();
     Ok(state
         .config
         .read()
         .map_err(|error| error.to_string())?
         .sources
+        .to_vec())
+}
+
+#[tauri::command]
+pub async fn add_custom_source(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    url: String,
+) -> Result<SourceConfig, String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 60 {
+        return Err("来源名称需为 1-60 个字符".into());
+    }
+    let parsed = reqwest::Url::parse(url.trim()).map_err(|_| "Feed 链接无效".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err("仅支持 HTTP(S) RSS/Atom 链接".into());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("Feed 链接不能包含用户凭据".into());
+    }
+    let client = state.http.read().map_err(|e| e.to_string())?.clone();
+    let body = client
+        .get(parsed.clone())
+        .header(
+            "Accept",
+            "application/atom+xml, application/rss+xml, application/xml, text/xml",
+        )
+        .send()
+        .await
+        .map_err(|e| format!("无法读取 Feed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Feed 返回错误: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("无法读取 Feed 内容: {e}"))?;
+    if crate::sources::feed::parse_feed(&body).is_empty() {
+        return Err("链接未返回可识别的 RSS/Atom 文章，不支持普通网页".into());
+    }
+    let host = parsed
+        .host_str()
+        .unwrap_or("feed")
+        .trim_start_matches("www.");
+    let (platform, icon) = detect_feed_platform(host);
+    let base_id: String = host
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    let source = SourceConfig {
+        id: format!(
+            "custom_{}_{}",
+            base_id.trim_matches('_'),
+            chrono::Utc::now().timestamp_millis()
+        ),
+        name: name.into(),
+        enabled: true,
+        subscribed: true,
+        interval_minutes: 60,
+        feed_url: Some(parsed.to_string()),
+        platform: Some(platform.into()),
+        icon: Some(icon.into()),
+    };
+    {
+        let mut config = state.config.write().map_err(|e| e.to_string())?;
+        if config
+            .sources
+            .iter()
+            .any(|source| source.feed_url.as_deref() == Some(parsed.as_str()))
+        {
+            return Err("该 Feed 已添加".into());
+        }
+        config.sources.push(source.clone());
+        config::save_config(&app, &config)?;
+    }
+    scheduler::restart_source(&app, source.id.clone(), source.interval_minutes, true);
+    Ok(source)
+}
+
+#[tauri::command]
+pub async fn remove_custom_source(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    let mut config = state.config.write().map_err(|e| e.to_string())?;
+    let index = config
+        .sources
         .iter()
-        .filter(|source| registered.contains(source.id.as_str()))
-        .cloned()
-        .collect())
+        .position(|source| {
+            source.id == id && source.id.starts_with("custom_") && source.feed_url.is_some()
+        })
+        .ok_or("只能删除用户添加的 Feed 来源")?;
+    config.sources.remove(index);
+    config::save_config(&app, &config)?;
+    drop(config);
+    scheduler::restart_source(&app, id, 60, false);
+    Ok(())
+}
+
+fn detect_feed_platform(host: &str) -> (&'static str, &'static str) {
+    if host.contains("github.com") {
+        ("github", "github")
+    } else if host.contains("zhihu.com") {
+        ("zhihu", "zhihu")
+    } else if host.contains("csdn.net") {
+        ("csdn", "csdn")
+    } else if host.contains("juejin.cn") {
+        ("juejin", "juejin")
+    } else if host.contains("medium.com") {
+        ("medium", "medium")
+    } else {
+        ("rss", "rss")
+    }
+}
+
+#[tauri::command]
+pub async fn get_trending_topics(state: State<'_, AppState>) -> Result<Vec<TrendingTopic>, String> {
+    let articles = db::get_articles(&state.db, None, 10_000, 0, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(build_trending_topics(
+        articles,
+        chrono::Utc::now().timestamp(),
+    ))
+}
+
+fn build_trending_topics(articles: Vec<Article>, now: i64) -> Vec<TrendingTopic> {
+    use std::collections::HashMap;
+    const TERMS: &[&str] = &[
+        "AI",
+        "大模型",
+        "人工智能",
+        "Rust",
+        "Python",
+        "Java",
+        "JavaScript",
+        "TypeScript",
+        "React",
+        "Vue",
+        "Linux",
+        "GitHub",
+        "OpenAI",
+        "Claude",
+        "数据库",
+        "云计算",
+        "开源",
+        "安全",
+        "芯片",
+        "机器人",
+        "算法",
+        "前端",
+        "后端",
+        "Android",
+        "iOS",
+    ];
+    let cutoff = now.saturating_sub(3 * 24 * 60 * 60);
+    let recent: Vec<Article> = articles
+        .into_iter()
+        .filter(|a| {
+            let time = if a.published_at > 0 {
+                a.published_at
+            } else {
+                a.fetched_at
+            };
+            time >= cutoff && time <= now
+        })
+        .collect();
+    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, article) in recent.iter().enumerate() {
+        let text = format!("{} {}", article.title, article.summary).to_lowercase();
+        for term in TERMS {
+            if text.contains(&term.to_lowercase()) {
+                groups.entry((*term).into()).or_default().push(index);
+            }
+        }
+        for term in topic_tokens(&article.title) {
+            groups.entry(term).or_default().push(index);
+        }
+    }
+    let mut topics: Vec<TrendingTopic> = groups
+        .into_iter()
+        .filter(|(_, matches)| !matches.is_empty())
+        .map(|(term, matches)| {
+            let representative = matches
+                .iter()
+                .map(|i| &recent[*i])
+                .max_by_key(|article| (article.hot_score, article.fetched_at))
+                .unwrap()
+                .clone();
+            let mut keywords = vec![term.clone()];
+            for candidate in TERMS {
+                if *candidate != term
+                    && matches
+                        .iter()
+                        .filter(|i| {
+                            format!("{} {}", recent[**i].title, recent[**i].summary)
+                                .to_lowercase()
+                                .contains(&candidate.to_lowercase())
+                        })
+                        .count()
+                        * 2
+                        >= matches.len()
+                {
+                    keywords.push((*candidate).into());
+                }
+            }
+            keywords.truncate(4);
+            TrendingTopic {
+                title: representative.title.clone(),
+                keywords,
+                article_count: matches.len(),
+                article: representative,
+            }
+        })
+        .collect();
+    let mut represented = topics
+        .iter()
+        .map(|topic| topic.article.id.clone())
+        .collect::<HashSet<_>>();
+    if topics.len() < 20 {
+        let mut fallback = recent.iter().collect::<Vec<_>>();
+        fallback.sort_by_key(|article| {
+            std::cmp::Reverse((article.hot_score, article.published_at, article.fetched_at))
+        });
+        for article in fallback {
+            if topics.len() >= 20 || !represented.insert(article.id.clone()) {
+                continue;
+            }
+            let mut keywords = topic_tokens(&article.title);
+            if keywords.is_empty() {
+                keywords.push(article.source.clone());
+            }
+            keywords.truncate(4);
+            topics.push(TrendingTopic {
+                title: article.title.clone(),
+                keywords,
+                article_count: 1,
+                article: article.clone(),
+            });
+        }
+    }
+    topics.sort_by(|a, b| {
+        b.article_count
+            .cmp(&a.article_count)
+            .then_with(|| b.article.hot_score.cmp(&a.article.hot_score))
+    });
+    topics.truncate(20);
+    topics
+}
+
+fn topic_tokens(title: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    for token in title
+        .to_lowercase()
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| (3..=24).contains(&token.len()))
+        .filter(|token| {
+            !matches!(
+                *token,
+                "the"
+                    | "and"
+                    | "for"
+                    | "with"
+                    | "from"
+                    | "this"
+                    | "that"
+                    | "how"
+                    | "why"
+                    | "new"
+                    | "using"
+                    | "into"
+                    | "your"
+                    | "you"
+            )
+        })
+    {
+        if !tokens.iter().any(|existing| existing == token) {
+            tokens.push(token.to_string());
+        }
+        if tokens.len() == 6 {
+            break;
+        }
+    }
+    tokens
 }
 
 /// 完整应用配置，供设置页初始化
@@ -319,6 +614,7 @@ pub async fn update_login(
     state: State<'_, AppState>,
     login: LoginConfig,
 ) -> Result<(), String> {
+    config::save_login(&login)?;
     {
         let mut cfg = state.config.write().unwrap();
         cfg.login = login;
@@ -633,9 +929,19 @@ pub async fn ai_search(
             },
         )
     };
-    let candidates = db::get_articles(&state.db, None, 40, 0, Some(&filter))
+    let matched = db::search_articles(&state.db, &query, Some(&filter))
         .await
         .map_err(|error| error.to_string())?;
+    let recent = db::get_articles(&state.db, None, 80, 0, Some(&filter))
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut candidate_ids = HashSet::new();
+    let candidates = matched
+        .into_iter()
+        .chain(recent)
+        .filter(|article| candidate_ids.insert(article.id.clone()))
+        .take(100)
+        .collect::<Vec<_>>();
     let client = state
         .http
         .read()
@@ -728,7 +1034,9 @@ impl EmitContent for AppHandle {
 mod tests {
     use std::collections::HashSet;
 
-    use super::{normalize_open_url, select_workspace_articles};
+    use super::{
+        build_trending_topics, detect_feed_platform, normalize_open_url, select_workspace_articles,
+    };
     use crate::models::Article;
 
     fn article(id: usize, source: &str, fetched_at: i64, hot_score: i64) -> Article {
@@ -785,6 +1093,46 @@ mod tests {
         assert_eq!(selected.len(), 50);
         assert_eq!(selected.first().map(|article| article.hot_score), Some(59));
         assert_eq!(selected.last().map(|article| article.hot_score), Some(10));
+    }
+
+    #[test]
+    fn topic_stream_uses_three_day_window_and_content_volume() {
+        let now = 1_000_000;
+        let mut first = article(1, "github", now - 10, 10);
+        first.title = "Rust AI 工具发布".into();
+        let mut second = article(2, "v2ex", now - 20, 20);
+        second.summary = "使用 Rust 构建 AI 服务".into();
+        let mut stale = article(3, "csdn", now - 4 * 24 * 60 * 60, 999);
+        stale.title = "Rust AI 旧闻".into();
+
+        let topics = build_trending_topics(vec![first, second, stale], now);
+        let rust = topics
+            .iter()
+            .find(|topic| topic.keywords.first().map(String::as_str) == Some("Rust"))
+            .expect("Rust topic");
+        assert_eq!(rust.article_count, 2);
+        assert!(topics.iter().all(|topic| topic.article_count <= 2));
+    }
+
+    #[test]
+    fn topic_stream_fills_top_twenty_from_recent_real_articles() {
+        let now = 1_000_000;
+        let articles = (0..25)
+            .map(|index| {
+                let mut item = article(index, "test", now - index as i64, index as i64);
+                item.title = format!("Project {index} release notes");
+                item
+            })
+            .collect();
+        let topics = build_trending_topics(articles, now);
+        assert_eq!(topics.len(), 20);
+        assert!(topics.iter().all(|topic| !topic.keywords.is_empty()));
+    }
+
+    #[test]
+    fn detects_known_feed_platform_and_falls_back_to_rss() {
+        assert_eq!(detect_feed_platform("github.com"), ("github", "github"));
+        assert_eq!(detect_feed_platform("example.com"), ("rss", "rss"));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::Row;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::models::{
@@ -114,6 +115,7 @@ pub async fn init_pool(db_path: PathBuf) -> Result<SqlitePool, sqlx::Error> {
     let pool = SqlitePool::connect_with(options).await?;
     sqlx::query(SCHEMA).execute(&pool).await?;
     repair_legacy_article_urls(&pool).await?;
+    repair_legacy_article_metadata(&pool).await?;
     Ok(pool)
 }
 
@@ -127,6 +129,22 @@ async fn repair_legacy_article_urls(pool: &SqlitePool) -> Result<u64, sqlx::Erro
     .execute(pool)
     .await?;
     Ok(result.rows_affected())
+}
+
+async fn repair_legacy_article_metadata(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE articles SET published_at = fetched_at
+         WHERE COALESCE(published_at, 0) <= 0 AND fetched_at > 0",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE articles SET content = NULL, has_content = 0
+         WHERE content IS NOT NULL AND TRIM(content) = TRIM(COALESCE(summary, ''))",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// 批量插入文章（去重），返回新增条数
@@ -165,13 +183,21 @@ pub async fn insert_articles(
         if result.rows_affected() > 0 {
             new_count += 1;
         } else {
-            // 已存在则更新热度
+            // Existing rows keep user state and cached content, while source metadata is refreshed.
             sqlx::query(
-                "UPDATE articles SET hot_score=?, hot_label=?, comments_count=? WHERE id=?",
+                "UPDATE articles SET title=?, url=?, summary=?, author=?, hot_score=?,
+                 hot_label=?, comments_count=?, published_at=?, fetched_at=?, thumbnail=? WHERE id=?",
             )
+            .bind(&a.title)
+            .bind(&a.url)
+            .bind(&a.summary)
+            .bind(a.author.as_deref())
             .bind(a.hot_score)
             .bind(&a.hot_label)
             .bind(a.comments_count)
+            .bind(a.published_at)
+            .bind(a.fetched_at)
+            .bind(a.thumbnail.as_deref())
             .bind(&a.id)
             .execute(pool)
             .await?;
@@ -303,7 +329,9 @@ pub async fn get_content(
         .bind(article_id)
         .fetch_optional(pool)
         .await?;
-    Ok(row.and_then(|r| r.get::<Option<String>, _>("content")))
+    Ok(row
+        .and_then(|r| r.get::<Option<String>, _>("content"))
+        .filter(|content| !content.trim().is_empty()))
 }
 
 /// 按 id 查单篇文章（含 content）
@@ -337,11 +365,16 @@ pub async fn update_content(
     article_id: &str,
     content: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE articles SET content = ?, has_content = 1 WHERE id = ?")
-        .bind(content)
-        .bind(article_id)
-        .execute(pool)
-        .await?;
+    let content = content.trim();
+    sqlx::query(
+        "UPDATE articles SET content = NULLIF(?, ''),
+         has_content = CASE WHEN ? = '' THEN 0 ELSE 1 END WHERE id = ?",
+    )
+    .bind(content)
+    .bind(content)
+    .bind(article_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -581,27 +614,234 @@ pub async fn get_article_analytics(
         value: row.get("hot_score"),
     })
     .collect();
-    let keywords = insight
+    let article = get_article_by_id(pool, article_id).await?;
+    let (keywords, domains) = article
         .as_ref()
-        .map(|value| {
-            value
-                .technologies
-                .iter()
-                .take(12)
-                .map(|label| LabelValue {
-                    label: label.clone(),
-                    value: 1,
-                })
-                .collect()
-        })
+        .map(|article| derive_article_labels(article, insight.as_ref()))
         .unwrap_or_default();
     Ok(ArticleAnalytics {
         view_count,
         ai_score: insight.as_ref().and_then(|value| value.score),
         trend,
         keywords,
-        domains: Vec::new(),
+        domains,
     })
+}
+
+const DOMAIN_TERMS: &[(&str, &[&str])] = &[
+    (
+        "人工智能",
+        &[
+            "ai",
+            "llm",
+            "openai",
+            "claude",
+            "机器学习",
+            "深度学习",
+            "大模型",
+            "人工智能",
+        ],
+    ),
+    (
+        "前端与 Web",
+        &[
+            "react",
+            "vue",
+            "angular",
+            "typescript",
+            "javascript",
+            "css",
+            "html",
+            "前端",
+            "web",
+        ],
+    ),
+    (
+        "后端与架构",
+        &[
+            "rust",
+            "java",
+            "golang",
+            "python",
+            "node.js",
+            "backend",
+            "server",
+            "微服务",
+            "后端",
+            "架构",
+        ],
+    ),
+    (
+        "云原生与运维",
+        &[
+            "kubernetes",
+            "docker",
+            "cloud",
+            "devops",
+            "linux",
+            "容器",
+            "云原生",
+            "云计算",
+            "运维",
+        ],
+    ),
+    (
+        "数据与存储",
+        &[
+            "database",
+            "sqlite",
+            "mysql",
+            "postgresql",
+            "redis",
+            "sql",
+            "数据库",
+            "数据工程",
+            "存储",
+        ],
+    ),
+    (
+        "安全",
+        &[
+            "security",
+            "vulnerability",
+            "cve",
+            "privacy",
+            "安全",
+            "漏洞",
+            "隐私",
+        ],
+    ),
+    (
+        "移动开发",
+        &["android", "ios", "swift", "kotlin", "flutter", "移动开发"],
+    ),
+];
+
+fn derive_article_labels(
+    article: &Article,
+    insight: Option<&ArticleInsight>,
+) -> (Vec<LabelValue>, Vec<LabelValue>) {
+    let text = format!(
+        "{} {} {}",
+        article.title,
+        article.summary,
+        article.content.as_deref().unwrap_or_default()
+    )
+    .to_lowercase();
+    let mut keyword_counts: HashMap<String, i64> = HashMap::new();
+
+    if let Some(insight) = insight {
+        for technology in &insight.technologies {
+            let label = technology.trim();
+            if label.is_empty() {
+                continue;
+            }
+            let normalized_label = label.to_lowercase();
+            let count = count_term(&text, &normalized_label).max(1);
+            keyword_counts
+                .entry(normalized_label)
+                .and_modify(|value| *value = (*value).max(count))
+                .or_insert(count);
+        }
+    }
+
+    let mut domains = Vec::new();
+    for (domain, terms) in DOMAIN_TERMS {
+        let mut domain_count = 0;
+        for term in *terms {
+            let count = count_term(&text, term);
+            if count > 0 {
+                domain_count += count;
+                keyword_counts
+                    .entry((*term).to_string())
+                    .and_modify(|value| *value = (*value).max(count))
+                    .or_insert(count);
+            }
+        }
+        if domain_count > 0 {
+            domains.push(LabelValue {
+                label: (*domain).into(),
+                value: domain_count,
+            });
+        }
+    }
+
+    let mut token_counts = HashMap::new();
+    for token in ascii_terms(&text) {
+        *token_counts.entry(token).or_insert(0) += 1;
+    }
+    for (token, count) in token_counts {
+        keyword_counts
+            .entry(token)
+            .and_modify(|value| *value = (*value).max(count))
+            .or_insert(count);
+    }
+
+    let mut keywords = keyword_counts
+        .into_iter()
+        .filter(|(label, _)| !is_stop_word(label))
+        .map(|(label, value)| LabelValue { label, value })
+        .collect::<Vec<_>>();
+    keywords.sort_by(|left, right| {
+        right
+            .value
+            .cmp(&left.value)
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    keywords.truncate(12);
+    domains.sort_by_key(|item| std::cmp::Reverse(item.value));
+    (keywords, domains)
+}
+
+fn count_term(text: &str, term: &str) -> i64 {
+    if term
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric())
+    {
+        text.split(|character: char| !character.is_ascii_alphanumeric())
+            .filter(|token| *token == term)
+            .count() as i64
+    } else {
+        text.match_indices(term).count() as i64
+    }
+}
+
+fn ascii_terms(text: &str) -> Vec<String> {
+    text.split(|character: char| {
+        !(character.is_ascii_alphanumeric() || matches!(character, '+' | '#' | '.' | '-'))
+    })
+    .map(|token| token.trim_matches(['.', '-']).to_string())
+    .filter(|token| token.len() >= 3 && token.len() <= 32)
+    .filter(|token| {
+        token
+            .chars()
+            .any(|character| character.is_ascii_alphabetic())
+    })
+    .collect()
+}
+
+fn is_stop_word(value: &str) -> bool {
+    matches!(
+        value,
+        "the"
+            | "and"
+            | "for"
+            | "with"
+            | "from"
+            | "this"
+            | "that"
+            | "into"
+            | "using"
+            | "new"
+            | "how"
+            | "what"
+            | "why"
+            | "are"
+            | "was"
+            | "not"
+            | "you"
+            | "your"
+    )
 }
 
 /// 标记全部已读（可选按源）
@@ -637,14 +877,15 @@ pub async fn unread_counts(pool: &SqlitePool) -> Result<UnreadCounts, sqlx::Erro
 /// 清理旧数据：保留每源最近 7 天 / 1000 条
 pub async fn cleanup_old(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let cutoff = chrono::Utc::now().timestamp() - 7 * 86400;
-    // 1. 删除超过 7 天的文章
+    // 1. Delete stale source content by publication time (or fetch time when unavailable).
     sqlx::query(
         "DELETE FROM articles
-         WHERE fetched_at < ? AND id NOT IN (
+         WHERE ((published_at > 0 AND published_at < ?) OR fetched_at < ?) AND id NOT IN (
            SELECT article_id FROM article_user_state
            WHERE bookmarked = 1 OR read_later = 1 OR in_knowledge = 1
          )",
     )
+    .bind(cutoff)
     .bind(cutoff)
     .execute(pool)
     .await?;
@@ -771,6 +1012,76 @@ mod tests {
         assert_eq!(
             row.get::<String, _>("url"),
             "https://www.zhihu.com/question/123456789"
+        );
+    }
+
+    #[tokio::test]
+    async fn repairs_unknown_timestamps_and_summary_only_fake_cache() {
+        let pool = test_pool().await;
+        insert_articles(
+            &pool,
+            "test",
+            123,
+            vec![raw("legacy", "Legacy", "Source excerpt")],
+        )
+        .await
+        .expect("insert legacy article");
+        sqlx::query(
+            "UPDATE articles SET published_at = 0, content = summary, has_content = 1
+             WHERE id = 'test:legacy'",
+        )
+        .execute(&pool)
+        .await
+        .expect("create legacy state");
+
+        repair_legacy_article_metadata(&pool)
+            .await
+            .expect("repair legacy metadata");
+        let article = get_article_by_id(&pool, "test:legacy")
+            .await
+            .expect("query article")
+            .expect("article remains");
+        assert_eq!(article.published_at, 123);
+        assert!(!article.has_content);
+        assert_eq!(get_content(&pool, "test:legacy").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn persists_non_empty_article_content_and_clears_empty_content() {
+        let pool = test_pool().await;
+        insert_articles(
+            &pool,
+            "test",
+            123,
+            vec![raw("cached", "Cached", "Source excerpt")],
+        )
+        .await
+        .expect("insert article");
+        update_content(&pool, "test:cached", " <p>Full article body</p> ")
+            .await
+            .expect("cache content");
+        assert_eq!(
+            get_content(&pool, "test:cached").await.unwrap().as_deref(),
+            Some("<p>Full article body</p>")
+        );
+        assert!(
+            get_article_by_id(&pool, "test:cached")
+                .await
+                .unwrap()
+                .unwrap()
+                .has_content
+        );
+
+        update_content(&pool, "test:cached", "   ")
+            .await
+            .expect("clear empty content");
+        assert_eq!(get_content(&pool, "test:cached").await.unwrap(), None);
+        assert!(
+            !get_article_by_id(&pool, "test:cached")
+                .await
+                .unwrap()
+                .unwrap()
+                .has_content
         );
     }
 
@@ -923,7 +1234,42 @@ mod tests {
         assert_eq!(analytics.view_count, Some(1));
         assert_eq!(analytics.ai_score, Some(8.5));
         assert_eq!(analytics.trend.len(), 1);
-        assert_eq!(analytics.keywords.len(), 2);
+        assert!(analytics.keywords.len() >= 2);
+        assert!(analytics.keywords.iter().any(|item| item.label == "rust"));
+        assert_eq!(
+            analytics.domains.first().map(|item| item.label.as_str()),
+            Some("人工智能")
+        );
+    }
+
+    #[tokio::test]
+    async fn derives_keywords_and_domain_shares_without_ai_artifact() {
+        let pool = test_pool().await;
+        insert_articles(
+            &pool,
+            "test",
+            chrono::Utc::now().timestamp(),
+            vec![raw(
+                "analytics",
+                "Rust Kubernetes security",
+                "Rust services run in Kubernetes containers with security controls",
+            )],
+        )
+        .await
+        .expect("insert article");
+        let analytics = get_article_analytics(&pool, "test:analytics")
+            .await
+            .expect("derive analytics");
+        assert!(analytics.keywords.iter().any(|item| item.label == "rust"));
+        assert!(analytics
+            .domains
+            .iter()
+            .any(|item| item.label == "后端与架构"));
+        assert!(analytics
+            .domains
+            .iter()
+            .any(|item| item.label == "云原生与运维"));
+        assert!(analytics.domains.iter().any(|item| item.label == "安全"));
     }
 
     #[test]

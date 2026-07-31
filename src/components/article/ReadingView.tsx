@@ -13,6 +13,7 @@ import {
   NotebookPen,
   Sparkles,
   User,
+  X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import toast from "react-hot-toast";
@@ -23,9 +24,11 @@ import { AiSettingsDialog } from "../ai/AiSettingsDialog";
 import { Button } from "../ui/button";
 import { sanitizeHtml } from "../../lib/sanitize";
 import { api, isTauriRuntime } from "../../lib/tauri";
+import { translate } from "../../lib/i18n";
 import { SOURCE_NAMES, type Article } from "../../lib/types";
 import { formatRelativeTime } from "../../lib/utils";
 import { useArticlesStore } from "../../stores/articlesStore";
+import { useUiStore } from "../../stores/uiStore";
 import { ArticleAnalyticsView, ArticleTrend } from "./reader/ArticleAnalyticsView";
 import { KnowledgeDialog, NoteDialog } from "./reader/ArticleActionDialogs";
 import { ConfirmDialog } from "./reader/ConfirmDialog";
@@ -53,6 +56,8 @@ export function ReadingView() {
   const articles = useArticlesStore((state) => state.articles);
   const readingArticleId = useArticlesStore((state) => state.readingArticleId);
   const loadArticles = useArticlesStore((state) => state.loadArticles);
+  const closeReader = useArticlesStore((state) => state.closeReader);
+  const locale = useUiStore((state) => state.locale);
   const setStoredArticleFlag = useArticlesStore((state) => state.setArticleFlag);
   const article = articles.find((item) => item.id === readingArticleId);
   const bookmarked = article?.is_bookmarked ?? false;
@@ -542,6 +547,15 @@ export function ReadingView() {
               onCopyLink={() => void copyArticleLink()}
               onOpenOriginal={openOriginal}
             />
+            <button
+              type="button"
+              onClick={closeReader}
+              className="ml-1 flex h-7 w-7 items-center justify-center rounded-md text-faint transition hover:bg-panel hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+              title={translate(locale, "reader.close")}
+              aria-label={translate(locale, "reader.close")}
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
         </div>
 
@@ -628,7 +642,7 @@ export function ReadingView() {
         </div>
 
         <div className="reader-toolbar flex h-16 shrink-0 items-center justify-between border-t border-line bg-white/95 px-5 shadow-toolbar backdrop-blur-sm">
-          <p className="hidden text-[10px] text-faint 2xl:block">{article.has_content ? "正文已缓存" : "外部链接内容"}</p>
+          <p className="hidden text-[10px] text-faint 2xl:block">{content ? "正文已缓存" : "外部链接内容"}</p>
           <div className="ml-auto flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={openOriginal}><ExternalLink className="h-3.5 w-3.5" />打开原文</Button>
             <Button variant="outline" size="sm" onClick={() => { setKnowledgeError(null); setKnowledgeOpen(true); }}>
@@ -705,14 +719,19 @@ export function ReadingView() {
 }
 
 function ReaderEmptyState() {
+  const locale = useUiStore((state) => state.locale);
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-white">
       <div className="h-11 shrink-0 border-b border-line" />
       <div className="flex flex-1 items-center justify-center px-8 text-center">
         <div>
           <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-card border border-line bg-panel text-faint"><Inbox className="h-5 w-5" /></span>
-          <h2 className="mt-4 text-[15px] font-semibold text-ink">选择一篇真实情报开始阅读</h2>
-          <p className="mt-2 max-w-[320px] text-[12px] leading-5 text-muted">完成数据源同步后，文章正文、摘要和分析结果会显示在这里。</p>
+          <h2 className="mt-4 text-[15px] font-semibold text-ink">
+            {translate(locale, "reader.empty.title")}
+          </h2>
+          <p className="mt-2 max-w-[320px] text-[12px] leading-5 text-muted">
+            {translate(locale, "reader.empty.description")}
+          </p>
         </div>
       </div>
     </section>

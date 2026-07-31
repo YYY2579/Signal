@@ -13,6 +13,7 @@ import type {
   FilterConfig,
   LoginConfig,
   SourceConfig,
+  TrendingTopic,
   UnreadCounts,
 } from "./types";
 
@@ -54,6 +55,9 @@ export const api = {
     invoke<string | null>("get_article_content", { articleId }),
 
   getSources: () => invoke<SourceConfig[]>("get_sources"),
+  addCustomSource: (name: string, url: string) => invoke<SourceConfig>("add_custom_source", { name, url }),
+  removeCustomSource: (id: string) => invoke<void>("remove_custom_source", { id }),
+  getTrendingTopics: () => invoke<TrendingTopic[]>("get_trending_topics"),
 
   getConfig: () => invoke<AppConfig>("get_config"),
 

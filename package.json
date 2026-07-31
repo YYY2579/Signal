@@ -1,7 +1,7 @@
 {
   "name": "signal",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "本地优先的个人 AI 信息情报桌面应用",
   "license": "MIT",
   "repository": {

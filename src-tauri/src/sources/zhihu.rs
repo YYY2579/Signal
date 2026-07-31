@@ -78,15 +78,10 @@ impl SourceFetcher for Zhihu {
 
     async fn fetch_content(
         &self,
-        _client: &reqwest::Client,
+        client: &reqwest::Client,
         article: &Article,
     ) -> FetchResult<Option<String>> {
-        // MVP：excerpt 作为离线正文；详细答案需登录态调答案 API（后续实现）
-        if article.summary.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(article.summary.clone()))
-        }
+        super::fetch_readable_content(client, &article.url).await
     }
 }
 

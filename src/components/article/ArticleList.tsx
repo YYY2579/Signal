@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Sparkles } from "lucide-react";
 
-import { SOURCE_NAMES } from "../../lib/types";
+import { api, isTauriRuntime } from "../../lib/tauri";
+import { translate, type MessageKey } from "../../lib/i18n";
+import { SOURCE_NAMES, type TrendingTopic } from "../../lib/types";
 import { cn } from "../../lib/utils";
 import { useArticlesStore } from "../../stores/articlesStore";
 import { useSourcesStore } from "../../stores/sourcesStore";
@@ -41,8 +43,13 @@ export function ArticleList() {
   const summaryStage = useUiStore((s) => s.summaryStage);
   const setSummaryStage = useUiStore((s) => s.setSummaryStage);
   const openAiPanel = useUiStore((s) => s.openAiPanel);
+  const locale = useUiStore((s) => s.locale);
+  const t = (key: MessageKey, values?: Record<string, string | number>) =>
+    translate(locale, key, values);
   const [activeTab, setActiveTab] = useState<FeedSort>("热度");
   const [filters, setFilters] = useState<FeedFilters>(DEFAULT_FEED_FILTERS);
+  const [trendingTopics, setTrendingTopics] = useState<TrendingTopic[]>([]);
+  const [trendingLoading, setTrendingLoading] = useState(false);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const enabledSourceCount = sources.filter((source) => source.enabled).length;
@@ -79,6 +86,12 @@ export function ArticleList() {
     void loadArticles();
   }, [activeView, loadArticles, subscriptionLoadKey, summaryLoadKey]);
 
+  useEffect(() => {
+    if (activeView !== "trending" || activeSource || !isTauriRuntime()) return;
+    setTrendingLoading(true);
+    void api.getTrendingTopics().then(setTrendingTopics).catch((error) => console.error("load trending topics failed", error)).finally(() => setTrendingLoading(false));
+  }, [activeSource, activeView, articles]);
+
   const aiRecommendationAvailable = viewArticles.some(
     (article) => typeof article.ai_score === "number",
   );
@@ -89,7 +102,15 @@ export function ArticleList() {
     }
   }, [activeTab, activeView, aiRecommendationAvailable]);
 
-  const viewMeta = VIEW_META[activeView];
+  const viewTitleKeys: Record<typeof activeView, MessageKey> = {
+    dashboard: "feed.title.dashboard",
+    trending: "feed.title.trending",
+    subscriptions: "feed.title.subscriptions",
+    summary: "feed.title.summary",
+    later: "feed.title.later",
+    knowledge: "feed.title.knowledge",
+  };
+  const viewMeta = { ...VIEW_META[activeView], title: t(viewTitleKeys[activeView]) };
   const activeFilterCount = countActiveFilters(filters);
   const activeSourceConfig = activeSource
     ? sources.find((source) => source.id === activeSource)
@@ -100,9 +121,9 @@ export function ArticleList() {
   const heading = activeSourceName ?? viewMeta.title;
   const countLabel = activeSourceName ? "条来源情报" : viewMeta.countLabel;
   const summaryEmpty = {
-    pending: ["没有待生成文章", "新同步的文章会进入待生成队列"],
-    draft: ["没有待审核草稿", "AI 生成后的草稿会在人工接受前保留在这里"],
-    accepted: ["还没有已完成摘要", "审核接受的 AI 摘要会保留在这里"],
+    pending: [t("feed.empty.summaryPending"), t("feed.empty.summaryPendingDescription")],
+    draft: [t("feed.empty.summaryDraft"), t("feed.empty.summaryDraftDescription")],
+    accepted: [t("feed.empty.summaryAccepted"), t("feed.empty.summaryAcceptedDescription")],
   }[summaryStage];
   const emptyTitle = activeSourceName
     ? `${activeSourceName} 暂无情报`
@@ -121,16 +142,16 @@ export function ArticleList() {
       ? "来源已停用 · 显示本地已存内容"
       : `当前来源 · ${activeSourceName}`
     : enabledSourceCount === 0
-      ? "等待数据源完成首次同步"
+      ? t("feed.connection.waiting")
       : activeView === "dashboard"
-        ? "最近 24 小时 · 跨源日常扫描"
+        ? t("feed.connection.dashboard")
         : activeView === "trending"
-          ? "真实热度归一化 · 跨源排名"
+          ? t("feed.connection.trending")
           : activeView === "subscriptions"
-            ? `${subscribedSources.length} 个已订阅来源 · 最新优先`
+            ? t("feed.connection.subscriptions", { count: subscribedSources.length })
             : activeView === "summary"
-              ? "全库真实队列 · 生成后人工审核"
-              : `已连接 ${enabledSourceCount} 个来源`;
+              ? t("feed.connection.summary")
+              : t("feed.connection.connected", { count: enabledSourceCount });
 
   const moveTabFocus = (currentIndex: number, direction: 1 | -1) => {
     for (let offset = 1; offset <= tabs.length; offset += 1) {
@@ -167,13 +188,15 @@ export function ArticleList() {
             type="button"
             onClick={() => openAiPanel("summary")}
             className="flex h-8 items-center gap-1.5 rounded-btn bg-accent px-3 text-[11px] font-semibold text-white shadow-sm transition hover:bg-accent-strong"
-            title={readingArticleId ? "处理当前文章摘要" : "选择文章并生成摘要"}
+            title={
+              readingArticleId ? t("feed.action.processCurrent") : t("feed.action.chooseArticle")
+            }
           >
             <Sparkles className="h-3.5 w-3.5" />
-            {readingArticleId ? "处理当前" : "选择文章"}
+            {readingArticleId ? t("feed.action.processCurrent") : t("feed.action.chooseArticle")}
           </button>
         ) : (
-        <div className="flex items-center rounded-btn bg-panel p-1" role="tablist" aria-label="信息流排序">
+        <div className="flex items-center rounded-btn bg-panel p-1" role="tablist" aria-label={t("feed.sort.label")}>
           {tabs.map((tab, index) => {
             const disabled = tab === "AI推荐" && !aiRecommendationAvailable;
             return (
@@ -223,7 +246,11 @@ export function ArticleList() {
                     : undefined
                 }
               >
-                {tab}
+                {tab === "热度"
+                  ? t("feed.sort.hot")
+                  : tab === "最新"
+                    ? t("feed.sort.latest")
+                    : t("feed.sort.ai")}
               </button>
             );
           })}
@@ -233,7 +260,7 @@ export function ArticleList() {
 
       <div className="flex items-center justify-between border-b border-line/70 px-5 py-2 text-[11px] text-faint">
         {activeView === "summary" && !activeSource ? (
-          <div className="flex items-center rounded-btn bg-panel p-0.5" role="tablist" aria-label="AI 摘要阶段">
+          <div className="flex items-center rounded-btn bg-panel p-0.5" role="tablist" aria-label={t("feed.summaryStages")}>
             {SUMMARY_STAGES.map((stage) => (
               <button
                 key={stage.id}
@@ -248,7 +275,11 @@ export function ArticleList() {
                     : "text-muted hover:text-ink",
                 )}
               >
-                {stage.label}
+                {stage.id === "pending"
+                  ? t("feed.stage.pending")
+                  : stage.id === "draft"
+                    ? t("feed.stage.draft")
+                    : t("feed.stage.accepted")}
                 {stage.id === summaryStage && (
                   <span className="ml-1 text-[9px] tabular-nums text-faint">
                     {sortedArticles.length}
@@ -264,7 +295,7 @@ export function ArticleList() {
             : loading && articles.length > 0
               ? "正在更新 · "
               : ""}
-          {sortedArticles.length} {countLabel}
+          {activeView === "trending" && !activeSource ? trendingTopics.length : sortedArticles.length} {countLabel}
           {loadError && articles.length > 0 && (
             <>
               <span className="sr-only">。{loadError}</span>
@@ -295,18 +326,32 @@ export function ArticleList() {
         aria-labelledby={activeView === "summary" ? undefined : tabIds[activeTab]}
         className="min-h-0 flex-1 overflow-y-auto bg-panel/40 px-5 py-4"
       >
-        {loading && articles.length === 0 ? (
+        {(loading && articles.length === 0) || (trendingLoading && trendingTopics.length === 0) ? (
           <SkeletonList />
         ) : loadError && articles.length === 0 ? (
-          <ErrorState message={loadError} onRetry={() => void loadArticles()} />
-        ) : sortedArticles.length === 0 ? (
+          <ErrorState message={loadError} locale={locale} onRetry={() => void loadArticles()} />
+        ) : (activeView === "trending" && !activeSource ? trendingTopics.length === 0 : sortedArticles.length === 0) ? (
           <EmptyState
             searching={searchQuery.trim().length > 0}
             filtered={activeFilterCount > 0}
             title={emptyTitle}
             description={emptyDescription}
+            locale={locale}
             onClearFilters={() => setFilters(DEFAULT_FEED_FILTERS)}
           />
+        ) : activeView === "trending" && !activeSource ? (
+          <div className="space-y-2" aria-live="polite">
+            {trendingTopics.map((topic, index) => (
+              <div key={`${topic.keywords[0]}-${topic.article.id}`} className="relative">
+                <div className="mb-1 flex items-center gap-1.5 px-1 text-[10px] text-faint">
+                  <span className="w-5 text-right font-bold tabular-nums text-accent">{String(index + 1).padStart(2, "0")}</span>
+                  <span className="font-semibold text-ink-2">{topic.article_count} 篇相关内容</span>
+                  {topic.keywords.map((keyword) => <span key={keyword} className="rounded bg-white px-1.5 py-0.5 text-[9px] text-muted ring-1 ring-line">{keyword}</span>)}
+                </div>
+                <ArticleCard article={topic.article} index={index} />
+              </div>
+            ))}
+          </div>
         ) : (
           <div className="space-y-3" aria-live="polite">
             {sortedArticles.map((article, index) => (
@@ -339,23 +384,25 @@ function EmptyState({
   filtered,
   title,
   description,
+  locale,
   onClearFilters,
 }: {
   searching: boolean;
   filtered: boolean;
   title: string;
   description: string;
+  locale: "zh-CN" | "en-US";
   onClearFilters: () => void;
 }) {
   const emptyTitle = searching
-    ? "未找到匹配情报"
+    ? translate(locale, "feed.empty.searchTitle")
     : filtered
-        ? "当前筛选没有结果"
+        ? translate(locale, "feed.empty.filteredTitle")
         : title;
   const emptyDescription = searching
-    ? "调整搜索词或数据源后重试"
+    ? translate(locale, "feed.empty.searchDescription")
     : filtered
-        ? "清除部分筛选条件后重试"
+        ? translate(locale, "feed.empty.filteredDescription")
         : description;
 
   return (
@@ -373,25 +420,35 @@ function EmptyState({
           onClick={onClearFilters}
           className="mt-3 h-8 rounded-btn border border-line bg-white px-3 text-[11px] font-semibold text-ink-2 transition hover:bg-panel"
         >
-          清除筛选
+          {translate(locale, "feed.empty.clearFilters")}
         </button>
       )}
     </div>
   );
 }
 
-function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+function ErrorState({
+  message,
+  locale,
+  onRetry,
+}: {
+  message: string;
+  locale: "zh-CN" | "en-US";
+  onRetry: () => void;
+}) {
   return (
     <div className="flex h-full flex-col items-center justify-center px-8 text-center" role="alert">
       <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-red-50 text-sm font-bold text-red-500">!</div>
-      <p className="text-sm font-semibold text-ink">情报加载失败</p>
+      <p className="text-sm font-semibold text-ink">
+        {translate(locale, "feed.error.title")}
+      </p>
       <p className="mt-1 max-w-[300px] break-words text-xs leading-5 text-muted">{message}</p>
       <button
         type="button"
         onClick={onRetry}
         className="mt-3 h-8 rounded-btn bg-accent px-3 text-[11px] font-semibold text-white transition hover:bg-accent-strong"
       >
-        重新加载
+        {translate(locale, "feed.error.reload")}
       </button>
     </div>
   );

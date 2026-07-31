@@ -14,6 +14,8 @@ interface SourcesState {
   toggleSource: (id: string, enabled: boolean) => Promise<void>;
   toggleSubscription: (id: string, subscribed: boolean) => Promise<void>;
   updateInterval: (id: string, minutes: number) => Promise<void>;
+  addSource: (name: string, url: string) => Promise<void>;
+  removeSource: (id: string) => Promise<void>;
 }
 
 export const useSourcesStore = create<SourcesState>((set, get) => ({
@@ -108,5 +110,15 @@ export const useSourcesStore = create<SourcesState>((set, get) => ({
       }));
       throw e;
     }
+  },
+  addSource: async (name, url) => {
+    if (!isTauriRuntime()) throw new Error("自定义来源仅在桌面应用中可用");
+    const source = await api.addCustomSource(name, url);
+    set((state) => ({ sources: [...state.sources, source] }));
+  },
+  removeSource: async (id) => {
+    if (!isTauriRuntime()) return;
+    await api.removeCustomSource(id);
+    set((state) => ({ sources: state.sources.filter((source) => source.id !== id) }));
   },
 }));

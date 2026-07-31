@@ -10,9 +10,11 @@ import {
   Check,
   CircleAlert,
   Database,
+  ExternalLink,
   Filter,
   KeyRound,
   LoaderCircle,
+  Plus,
   RotateCw,
   Settings2,
   ShieldCheck,
@@ -242,9 +244,14 @@ function SourcesSection() {
   const toggleSource = useSourcesStore((state) => state.toggleSource);
   const toggleSubscription = useSourcesStore((state) => state.toggleSubscription);
   const updateInterval = useSourcesStore((state) => state.updateInterval);
+  const addSource = useSourcesStore((state) => state.addSource);
+  const removeSource = useSourcesStore((state) => state.removeSource);
   const [pendingSource, setPendingSource] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [intervalDrafts, setIntervalDrafts] = useState<Record<string, string>>({});
+  const [customName, setCustomName] = useState("");
+  const [customUrl, setCustomUrl] = useState("");
+  const [adding, setAdding] = useState(false);
 
   useEffect(() => {
     setIntervalDrafts(
@@ -296,7 +303,63 @@ function SourcesSection() {
   }
 
   return (
-    <div>
+    <div className="space-y-3">
+      <form
+        className="rounded-btn border border-line bg-panel/50 p-3"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setAdding(true);
+          setError(null);
+          try {
+            await addSource(customName, customUrl);
+            setCustomName("");
+            setCustomUrl("");
+          } catch (cause) {
+            setError(cause instanceof Error ? cause.message : "添加 Feed 失败");
+          } finally {
+            setAdding(false);
+          }
+        }}
+      >
+        <div className="mb-2">
+          <p className="text-[12px] font-semibold text-ink-2">添加 RSS / Atom 来源</p>
+          <p className="mt-0.5 text-[10px] text-faint">
+            系统会验证 Feed 格式并识别平台；普通网页暂不支持。
+          </p>
+        </div>
+        <div className="grid grid-cols-[minmax(100px,0.7fr)_minmax(180px,1.3fr)_auto] gap-2">
+          <input
+            required
+            maxLength={60}
+            value={customName}
+            onChange={(event) => setCustomName(event.target.value)}
+            placeholder="来源名称"
+            aria-label="自定义来源名称"
+            className="h-9 min-w-0 rounded-btn border border-line bg-white px-2.5 text-[11px] outline-none focus:border-indigo-300"
+          />
+          <input
+            required
+            type="url"
+            value={customUrl}
+            onChange={(event) => setCustomUrl(event.target.value)}
+            placeholder="https://example.com/feed.xml"
+            aria-label="RSS 或 Atom 链接"
+            className="h-9 min-w-0 rounded-btn border border-line bg-white px-2.5 text-[11px] outline-none focus:border-indigo-300"
+          />
+          <button
+            type="submit"
+            disabled={adding}
+            className="flex h-9 items-center gap-1.5 rounded-btn bg-accent px-3 text-[11px] font-semibold text-white disabled:opacity-60"
+          >
+            {adding ? (
+              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="h-3.5 w-3.5" />
+            )}
+            添加
+          </button>
+        </div>
+      </form>
       <div className="overflow-hidden rounded-btn border border-line">
         {sources.map((source, index) => (
           <div
@@ -348,6 +411,18 @@ function SourcesSection() {
                 )
               }
             />
+            {source.id.startsWith("custom_") && source.feed_url && (
+              <button
+                type="button"
+                title={`删除 ${source.name}`}
+                aria-label={`删除 ${source.name}`}
+                disabled={pendingSource === source.id}
+                onClick={() => void saveSource(() => removeSource(source.id), source.id)}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-faint transition hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            )}
             <SourceToggle
               label="同步"
               checked={source.enabled}
@@ -973,12 +1048,15 @@ function LoginSection() {
 
   return (
     <form onSubmit={submit} className="space-y-3">
+      <div className="rounded-btn border border-blue-100 bg-blue-50/60 px-3 py-2.5 text-[10px] leading-5 text-blue-800">
+        先在系统浏览器登录目标网站，再从浏览器开发者工具复制请求 Cookie 并粘贴到下方。Signal 不会读取浏览器 Cookie；内容会保存在系统钥匙串，重启后仍有效。
+      </div>
       {(["juejin", "zhihu"] as const).map((source) => (
         <label key={source} className="block space-y-1.5 text-[11px] font-medium text-muted">
-          <span>{source === "juejin" ? "掘金" : "知乎"} Cookie</span>
+          <span className="flex items-center justify-between"><span>{source === "juejin" ? "掘金" : "知乎"} Cookie</span><button type="button" onClick={() => void api.openArticleUrl(source === "juejin" ? "https://juejin.cn/" : "https://www.zhihu.com/")} className="flex items-center gap-1 text-accent hover:underline"><ExternalLink className="h-3 w-3" />前往登录</button></span>
           <input
             type="password"
-            autoComplete="off"
+            autoComplete="new-password"
             value={draft[source] ?? ""}
             onChange={(event) =>
               setDraft((current) => ({ ...current, [source]: event.target.value || null }))

@@ -121,18 +121,22 @@ impl SourceFetcher for LeetCode {
             .json()
             .await?;
 
+        let cutoff = chrono::Utc::now().timestamp() - 30 * 24 * 60 * 60;
         Ok(response
             .data
             .map(|data| map_questions(data.qa_question_list.nodes))
-            .unwrap_or_default())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|article| article.published_at >= cutoff)
+            .collect())
     }
 
     async fn fetch_content(
         &self,
-        _client: &reqwest::Client,
+        client: &reqwest::Client,
         article: &Article,
     ) -> FetchResult<Option<String>> {
-        Ok((!article.summary.trim().is_empty()).then(|| article.summary.clone()))
+        super::fetch_readable_content(client, &article.url).await
     }
 }
 
