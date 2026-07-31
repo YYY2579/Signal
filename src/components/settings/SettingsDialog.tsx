@@ -9,6 +9,7 @@ import {
   Bot,
   Check,
   CircleAlert,
+  ClipboardPaste,
   Database,
   ExternalLink,
   Filter,
@@ -1111,66 +1112,183 @@ function AiSection() {
 function LoginSection() {
   const login = useSettingsStore((state) => state.login);
   const setLogin = useSettingsStore((state) => state.setLogin);
-  const [draft, setDraft] = useState(login);
-  const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [error, setError] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState({ juejin: "", zhihu: "" });
+  const [visibleInputs, setVisibleInputs] = useState({ juejin: false, zhihu: false });
+  const [savingSource, setSavingSource] = useState<"juejin" | "zhihu" | null>(null);
+  const [status, setStatus] = useState<Record<"juejin" | "zhihu", "idle" | "saved" | "error">>({
+    juejin: "idle",
+    zhihu: "idle",
+  });
+  const [errors, setErrors] = useState<Partial<Record<"juejin" | "zhihu", string>>>({});
 
-  useEffect(() => setDraft(login), [login]);
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setStatus("saving");
-    setError(null);
+  const saveCookie = async (source: "juejin" | "zhihu") => {
+    const cookie = drafts[source].trim();
+    if (!cookie) {
+      setStatus((current) => ({ ...current, [source]: "error" }));
+      setErrors((current) => ({ ...current, [source]: "请从已登录浏览器手动粘贴完整 Cookie。" }));
+      return;
+    }
+    setSavingSource(source);
+    setErrors((current) => ({ ...current, [source]: undefined }));
     try {
-      await setLogin(draft);
-      setStatus("saved");
+      await setLogin({ ...login, [source]: cookie });
+      setDrafts((current) => ({ ...current, [source]: "" }));
+      setStatus((current) => ({ ...current, [source]: "saved" }));
     } catch (cause) {
-      setStatus("error");
-      setError(cause instanceof Error ? cause.message : "登录态保存失败");
+      setStatus((current) => ({ ...current, [source]: "error" }));
+      setErrors((current) => ({
+        ...current,
+        [source]: cause instanceof Error ? cause.message : "登录态保存失败",
+      }));
+    } finally {
+      setSavingSource(null);
+    }
+  };
+
+  const clearCookie = async (source: "juejin" | "zhihu") => {
+    setSavingSource(source);
+    setErrors((current) => ({ ...current, [source]: undefined }));
+    try {
+      await setLogin({ ...login, [source]: null });
+      setDrafts((current) => ({ ...current, [source]: "" }));
+      setStatus((current) => ({ ...current, [source]: "idle" }));
+    } catch (cause) {
+      setStatus((current) => ({ ...current, [source]: "error" }));
+      setErrors((current) => ({
+        ...current,
+        [source]: cause instanceof Error ? cause.message : "清除登录态失败",
+      }));
+    } finally {
+      setSavingSource(null);
     }
   };
 
   return (
-    <form onSubmit={submit} className="space-y-3">
+    <div className="space-y-3">
       <div className="rounded-btn border border-blue-100 bg-blue-50/60 px-3 py-2.5 text-[10px] leading-5 text-blue-800">
-        先在系统浏览器登录目标网站，再从浏览器开发者工具复制请求 Cookie 并粘贴到下方。Signal 不会读取浏览器 Cookie；内容会保存在系统钥匙串，重启后仍有效。
+        Signal 受浏览器安全隔离限制，无法自动读取其他浏览器的 Cookie。请在登录后的浏览器中手动复制 Cookie 并粘贴；保存内容由系统钥匙串保护，Signal 不会显示完整值。
       </div>
       {(["juejin", "zhihu"] as const).map((source) => (
-        <label key={source} className="block space-y-1.5 text-[11px] font-medium text-muted">
-          <span className="flex items-center justify-between"><span>{source === "juejin" ? "掘金" : "知乎"} Cookie</span><button type="button" onClick={() => void api.openArticleUrl(source === "juejin" ? "https://juejin.cn/" : "https://www.zhihu.com/")} className="flex items-center gap-1 text-accent hover:underline"><ExternalLink className="h-3 w-3" />前往登录</button></span>
-          <input
-            type="password"
-            autoComplete="new-password"
-            value={draft[source] ?? ""}
-            onChange={(event) =>
-              setDraft((current) => ({ ...current, [source]: event.target.value || null }))
+        <LoginSourceCard
+          key={source}
+          source={source}
+          configured={Boolean(login[source])}
+          draft={drafts[source]}
+          reveal={visibleInputs[source]}
+          busy={savingSource === source}
+          status={status[source]}
+          error={errors[source]}
+          onOpenLogin={() => void api.openArticleUrl(source === "juejin" ? "https://juejin.cn/" : "https://www.zhihu.com/")}
+          onDraftChange={(value) => {
+            setDrafts((current) => ({ ...current, [source]: value }));
+            setStatus((current) => ({ ...current, [source]: "idle" }));
+            setErrors((current) => ({ ...current, [source]: undefined }));
+          }}
+          onToggleReveal={() => setVisibleInputs((current) => ({ ...current, [source]: !current[source] }))}
+          onPaste={async () => {
+            try {
+              const value = await navigator.clipboard.readText();
+              if (!value.trim()) throw new Error("剪贴板中没有可粘贴的 Cookie");
+              setDrafts((current) => ({ ...current, [source]: value.trim() }));
+              setStatus((current) => ({ ...current, [source]: "idle" }));
+              setErrors((current) => ({ ...current, [source]: undefined }));
+            } catch (cause) {
+              setStatus((current) => ({ ...current, [source]: "error" }));
+              setErrors((current) => ({
+                ...current,
+                [source]: cause instanceof Error ? cause.message : "无法读取剪贴板，请直接粘贴到输入框",
+              }));
             }
-            placeholder="未配置"
-            className="h-9 w-full rounded-btn border border-line px-2.5 text-[12px] text-ink-2 outline-none focus:border-indigo-300"
-          />
-        </label>
+          }}
+          onSave={() => void saveCookie(source)}
+          onClear={() => void clearCookie(source)}
+        />
       ))}
-      <div className="flex min-h-9 items-center justify-end gap-2">
-        {status === "saved" && (
-          <span className="flex items-center gap-1 text-[11px] text-emerald-600">
-            <ShieldCheck className="h-3.5 w-3.5" /> 已保存
+    </div>
+  );
+}
+
+function LoginSourceCard({
+  source,
+  configured,
+  draft,
+  reveal,
+  busy,
+  status,
+  error,
+  onOpenLogin,
+  onDraftChange,
+  onToggleReveal,
+  onPaste,
+  onSave,
+  onClear,
+}: {
+  source: "juejin" | "zhihu";
+  configured: boolean;
+  draft: string;
+  reveal: boolean;
+  busy: boolean;
+  status: "idle" | "saved" | "error";
+  error?: string;
+  onOpenLogin: () => void;
+  onDraftChange: (value: string) => void;
+  onToggleReveal: () => void;
+  onPaste: () => void;
+  onSave: () => void;
+  onClear: () => void;
+}) {
+  const isJuejin = source === "juejin";
+  const name = isJuejin ? "掘金" : "知乎";
+  const example = isJuejin ? "sessionid=...; uid=..." : "z_c0=...; _zap=...";
+  return (
+    <section className="rounded-btn border border-line bg-white p-3" aria-label={`${name}登录设置`}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className={cn("h-2 w-2 rounded-full", configured ? "bg-emerald-500" : "bg-gray-300")} aria-hidden="true" />
+          <p className="text-[12px] font-semibold text-ink-2">{name}</p>
+          <span className={cn("rounded-full px-1.5 py-0.5 text-[9px] font-semibold", configured ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-faint")}>
+            {configured ? "已保存" : "未配置"}
           </span>
-        )}
-        {status === "error" && error && (
-          <span role="alert" className="mr-auto text-[11px] text-red-600">
-            {error}
-          </span>
-        )}
-        <button
-          type="submit"
-          disabled={status === "saving"}
-          className="flex h-9 items-center gap-1.5 rounded-btn bg-accent px-3.5 text-[12px] font-medium text-white transition hover:bg-accent-strong disabled:opacity-60"
-        >
-          {status === "saving" && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}
-          保存登录态
+        </div>
+        <button type="button" onClick={onOpenLogin} className="flex h-7 items-center gap-1 rounded-btn px-2 text-[10px] font-medium text-accent transition hover:bg-accent-soft" title={`打开${name}登录页`}>
+          <ExternalLink className="h-3 w-3" />打开登录页
         </button>
       </div>
-    </form>
+      <ol className="mt-2 grid gap-1 text-[10px] leading-4 text-muted">
+        <li>1. 在打开的页面完成登录。</li>
+        <li>2. 在浏览器开发者工具的请求头中复制完整 <code className="rounded bg-panel px-1 text-[9px] text-ink-2">Cookie</code>。</li>
+        <li>3. 主动粘贴到下方后保存。示例格式：<code className="rounded bg-panel px-1 text-[9px] text-ink-2">{example}</code></li>
+      </ol>
+      <div className="mt-2 flex gap-2">
+        <div className="relative min-w-0 flex-1">
+          <input
+            type={reveal ? "text" : "password"}
+            autoComplete="off"
+            value={draft}
+            onChange={(event) => onDraftChange(event.target.value)}
+            placeholder={configured ? "已保存新的 Cookie 可直接替换" : "手动粘贴 Cookie"}
+            aria-label={`${name} Cookie`}
+            className="h-9 w-full rounded-btn border border-line bg-white px-2.5 pr-12 text-[11px] text-ink-2 outline-none focus:border-indigo-300"
+          />
+          <button type="button" onClick={onToggleReveal} className="absolute right-1 top-1/2 h-7 -translate-y-1/2 rounded-md px-2 text-[9px] font-medium text-faint transition hover:bg-panel hover:text-ink" title={reveal ? "隐藏输入内容" : "显示当前输入内容"}>
+            {reveal ? "隐藏" : "显示"}
+          </button>
+        </div>
+        <button type="button" disabled={busy} onClick={onPaste} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-btn border border-line text-faint transition hover:bg-panel hover:text-ink disabled:opacity-50" title="从剪贴板粘贴" aria-label={`从剪贴板粘贴${name} Cookie`}>
+          <ClipboardPaste className="h-3.5 w-3.5" />
+        </button>
+        <button type="button" disabled={busy || !draft.trim()} onClick={onSave} className="flex h-9 shrink-0 items-center gap-1 rounded-btn bg-accent px-3 text-[10px] font-semibold text-white transition hover:bg-accent-strong disabled:opacity-50">
+          {busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}保存
+        </button>
+        {configured && (
+          <button type="button" disabled={busy} onClick={onClear} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-btn border border-line text-faint transition hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:opacity-50" title={`清除${name}登录态`} aria-label={`清除${name}登录态`}>
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      {status === "saved" && <p className="mt-2 flex items-center gap-1 text-[10px] text-emerald-600"><ShieldCheck className="h-3.5 w-3.5" />已保存到系统钥匙串，完整 Cookie 不会在此显示。</p>}
+      {status === "error" && error && <p role="alert" className="mt-2 text-[10px] text-red-600">{error}</p>}
+    </section>
   );
 }
 

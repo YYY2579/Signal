@@ -82,6 +82,8 @@ pub fn run() {
             commands::save_article_note,
             commands::get_article_insight,
             commands::generate_article_insight,
+            commands::get_article_mind_map,
+            commands::generate_article_mind_map,
             commands::review_article_insight,
             commands::get_article_analytics,
             commands::get_ai_settings,

@@ -7,9 +7,9 @@ use crate::ai;
 use crate::config;
 use crate::db;
 use crate::models::{
-    AiPreferences, AiSearchResponse, AiSettings, AiValidation, AppConfig, Article,
-    ArticleAnalytics, ArticleFilter, ArticleInsight, FilterConfig, LoginConfig, SourceConfig,
-    TrendingTopic, UnreadCounts,
+    AiAnswerScope, AiPreferences, AiSearchResponse, AiSettings, AiValidation, AppConfig, Article,
+    ArticleAnalytics, ArticleFilter, ArticleInsight, ArticleMindMap, FilterConfig, LoginConfig,
+    SourceConfig, TrendingTopic, UnreadCounts,
 };
 use crate::scheduler;
 use crate::state::{build_http_client_with_cookie, get_cookie_for_source, AppState};
@@ -790,6 +790,34 @@ pub async fn generate_article_insight(
     }
 }
 
+#[tauri::command]
+pub async fn get_article_mind_map(
+    state: State<'_, AppState>,
+    article_id: String,
+) -> Result<Option<ArticleMindMap>, String> {
+    db::get_article_mind_map(&state.db, &article_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn generate_article_mind_map(
+    state: State<'_, AppState>,
+    article_id: String,
+) -> Result<ArticleMindMap, String> {
+    let article = db::get_article_by_id(&state.db, &article_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("article not found")?;
+    let preferences = state.config.read().map_err(|e| e.to_string())?.ai.clone();
+    let client = state.http.read().map_err(|e| e.to_string())?.clone();
+    let map = ai::generate_mind_map(&client, &preferences, &article).await?;
+    db::save_article_mind_map(&state.db, &article_id, &map)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(map)
+}
+
 #[derive(serde::Deserialize)]
 struct EditableInsight {
     summary: String,
@@ -981,9 +1009,20 @@ pub async fn ai_search(
             ranked.push(article.clone());
         }
     }
+    let cited_article_count = ranked.len();
+    let local_candidate_count = candidates.len();
     Ok(AiSearchResponse {
         answer,
         articles: ranked,
+        local_candidate_count,
+        cited_article_count,
+        answer_scope: if cited_article_count > 0 {
+            AiAnswerScope::LocalAndModel
+        } else {
+            AiAnswerScope::ModelOnly
+        },
+        freshness_notice:
+            "AI 回答不等同于实时互联网检索；时效性事实请以引用的本地采集时间和原文为准。".into(),
     })
 }
 

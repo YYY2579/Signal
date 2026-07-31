@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import {
   BookOpen,
   Bookmark,
+  BrainCircuit,
   Clock3,
   ExternalLink,
   Eye,
@@ -25,7 +26,7 @@ import { Button } from "../ui/button";
 import { sanitizeHtml } from "../../lib/sanitize";
 import { api, isTauriRuntime } from "../../lib/tauri";
 import { translate } from "../../lib/i18n";
-import { SOURCE_NAMES, type Article } from "../../lib/types";
+import { SOURCE_NAMES, type Article, type ArticleMindMap } from "../../lib/types";
 import { formatRelativeTime } from "../../lib/utils";
 import { useArticlesStore } from "../../stores/articlesStore";
 import { useUiStore } from "../../stores/uiStore";
@@ -47,6 +48,11 @@ import {
 } from "./reader/types";
 
 const readerApi = api as unknown as ReaderApi;
+const ArticleMindMapDialog = lazy(() =>
+  import("./reader/ArticleMindMapDialog").then((module) => ({
+    default: module.ArticleMindMapDialog,
+  })),
+);
 
 function isReadingArticle(articleId: string) {
   return useArticlesStore.getState().readingArticleId === articleId;
@@ -91,10 +97,15 @@ export function ReadingView() {
   const [aiSettingsLoading, setAiSettingsLoading] = useState(false);
   const [aiSettingsBusy, setAiSettingsBusy] = useState(false);
   const [aiSettingsError, setAiSettingsError] = useState<string | null>(null);
-  const [continueAfterConfig, setContinueAfterConfig] = useState(false);
+  const [continueAfterConfig, setContinueAfterConfig] = useState<"insight" | "mind-map" | null>(null);
   const [sendConfirmOpen, setSendConfirmOpen] = useState(false);
   const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
   const [deleteKeyConfirmOpen, setDeleteKeyConfirmOpen] = useState(false);
+  const [mindMapOpen, setMindMapOpen] = useState(false);
+  const [mindMap, setMindMap] = useState<ArticleMindMap | null>(null);
+  const [mindMapLoading, setMindMapLoading] = useState(false);
+  const [mindMapGenerating, setMindMapGenerating] = useState(false);
+  const [mindMapError, setMindMapError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!article) {
@@ -116,10 +127,15 @@ export function ReadingView() {
       setKnowledgeOpen(false);
       setNoteOpen(false);
       setAiSettingsOpen(false);
-      setContinueAfterConfig(false);
+      setContinueAfterConfig(null);
       setSendConfirmOpen(false);
       setRejectConfirmOpen(false);
       setDeleteKeyConfirmOpen(false);
+      setMindMapOpen(false);
+      setMindMap(null);
+      setMindMapLoading(false);
+      setMindMapGenerating(false);
+      setMindMapError(null);
       return;
     }
 
@@ -141,6 +157,11 @@ export function ReadingView() {
     setNoteOpen(false);
     setSendConfirmOpen(false);
     setRejectConfirmOpen(false);
+    setMindMapOpen(false);
+    setMindMap(null);
+    setMindMapLoading(false);
+    setMindMapGenerating(false);
+    setMindMapError(null);
 
     if (!isTauriRuntime()) {
       setContentLoading(false);
@@ -313,7 +334,9 @@ export function ReadingView() {
     }
   };
 
-  const openAiConfiguration = async (resumeGeneration = false) => {
+  const openAiConfiguration = async (
+    resumeGeneration: "insight" | "mind-map" | null = null,
+  ) => {
     setContinueAfterConfig(resumeGeneration);
     setAiSettingsOpen(true);
     setAiSettingsLoading(true);
@@ -344,13 +367,13 @@ export function ReadingView() {
       const settings = normalizeAiSettings(await readerApi.getAiSettings());
       setAiSettings(settings);
       if (!settings.configured || !settings.model || !settings.base_url) {
-        await openAiConfiguration(true);
+        await openAiConfiguration("insight");
         return;
       }
       setSendConfirmOpen(true);
     } catch (error) {
       setGenerationError(safeError(error, "AI 设置读取失败"));
-      await openAiConfiguration(true);
+      await openAiConfiguration("insight");
     }
   };
 
@@ -374,8 +397,12 @@ export function ReadingView() {
       setAiSettings(saved);
       setAiSettingsOpen(false);
       toast.success("AI 服务连接验证通过");
-      if (continueAfterConfig) setSendConfirmOpen(true);
-      setContinueAfterConfig(false);
+      if (continueAfterConfig === "insight") {
+        setSendConfirmOpen(true);
+      } else if (continueAfterConfig === "mind-map") {
+        void generateMindMap();
+      }
+      setContinueAfterConfig(null);
     } catch (error) {
       setAiSettingsError(safeError(error, "AI 服务配置失败"));
     } finally {
@@ -430,6 +457,66 @@ export function ReadingView() {
       }
     } finally {
       window.clearTimeout(phaseTimer);
+    }
+  };
+
+  const openMindMap = async () => {
+    const articleId = article.id;
+    setMindMapOpen(true);
+    setMindMapError(null);
+    if (mindMap || mindMapLoading || mindMapGenerating) return;
+    if (!isTauriRuntime()) {
+      setMindMapError("思维导图需要在 Signal 桌面应用中读取和生成");
+      return;
+    }
+    setMindMapLoading(true);
+    try {
+      const saved = await api.getArticleMindMap(articleId);
+      if (isReadingArticle(articleId)) setMindMap(saved);
+    } catch (error) {
+      if (isReadingArticle(articleId)) {
+        setMindMapError(safeError(error, "思维导图读取失败"));
+      }
+    } finally {
+      if (isReadingArticle(articleId)) setMindMapLoading(false);
+    }
+  };
+
+  const prepareMindMapGeneration = async () => {
+    if (!isTauriRuntime()) {
+      setMindMapError("思维导图需要在 Signal 桌面应用中生成");
+      return;
+    }
+    setMindMapError(null);
+    try {
+      const settings = normalizeAiSettings(await readerApi.getAiSettings());
+      setAiSettings(settings);
+      if (!settings.configured || !settings.model || !settings.base_url) {
+        await openAiConfiguration("mind-map");
+        return;
+      }
+      await generateMindMap();
+    } catch (error) {
+      setMindMapError(safeError(error, "AI 设置读取失败"));
+      await openAiConfiguration("mind-map");
+    }
+  };
+
+  const generateMindMap = async () => {
+    const articleId = article.id;
+    setMindMapGenerating(true);
+    setMindMapError(null);
+    try {
+      const generated = await api.generateArticleMindMap(articleId);
+      if (!isReadingArticle(articleId)) return;
+      setMindMap(generated);
+      toast.success("文章思维导图已生成并保存到本机");
+    } catch (error) {
+      if (isReadingArticle(articleId)) {
+        setMindMapError(safeError(error, "思维导图生成失败"));
+      }
+    } finally {
+      if (isReadingArticle(articleId)) setMindMapGenerating(false);
     }
   };
 
@@ -632,7 +719,7 @@ export function ReadingView() {
                 reviewBusy={reviewBusy}
                 reviewError={reviewError}
                 onRetryLoad={() => void refreshInsight()}
-                onConfigure={() => void openAiConfiguration(false)}
+                onConfigure={() => void openAiConfiguration(null)}
                 onGenerate={() => void prepareGeneration()}
                 onAccept={(edited) => void acceptInsight(edited)}
                 onReject={() => setRejectConfirmOpen(true)}
@@ -644,12 +731,17 @@ export function ReadingView() {
         <div className="reader-toolbar flex h-16 shrink-0 items-center justify-between border-t border-line bg-white/95 px-5 shadow-toolbar backdrop-blur-sm">
           <p className="hidden text-[10px] text-faint 2xl:block">{content ? "正文已缓存" : "外部链接内容"}</p>
           <div className="ml-auto flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={openOriginal}><ExternalLink className="h-3.5 w-3.5" />打开原文</Button>
-            <Button variant="outline" size="sm" onClick={() => { setKnowledgeError(null); setKnowledgeOpen(true); }}>
-              <BookOpen className="h-3.5 w-3.5" />{inKnowledge ? "已加入知识库" : "加入知识库"}
+            <Button variant="outline" size="sm" className="reader-toolbar-button w-9 px-0" title="思维导图" aria-label="思维导图" onClick={() => void openMindMap()}>
+              <BrainCircuit className="h-3.5 w-3.5" /><span className="reader-toolbar-label">思维导图</span>
             </Button>
-            <Button size="sm" onClick={() => { setNoteError(null); setNoteOpen(true); }}>
-              <NotebookPen className="h-3.5 w-3.5" />生成笔记
+            <Button variant="outline" size="sm" className="reader-toolbar-button w-9 px-0" title="打开原文" aria-label="打开原文" onClick={openOriginal}>
+              <ExternalLink className="h-3.5 w-3.5" /><span className="reader-toolbar-label">打开原文</span>
+            </Button>
+            <Button variant="outline" size="sm" className="reader-toolbar-button w-9 px-0" title={inKnowledge ? "已加入知识库" : "加入知识库"} aria-label={inKnowledge ? "已加入知识库" : "加入知识库"} onClick={() => { setKnowledgeError(null); setKnowledgeOpen(true); }}>
+              <BookOpen className="h-3.5 w-3.5" /><span className="reader-toolbar-label">{inKnowledge ? "已加入知识库" : "加入知识库"}</span>
+            </Button>
+            <Button size="sm" className="reader-toolbar-button w-9 px-0" title="生成笔记" aria-label="生成笔记" onClick={() => { setNoteError(null); setNoteOpen(true); }}>
+              <NotebookPen className="h-3.5 w-3.5" /><span className="reader-toolbar-label">生成笔记</span>
             </Button>
           </div>
         </div>
@@ -674,13 +766,28 @@ export function ReadingView() {
         onClose={() => setNoteOpen(false)}
         onSave={(title, noteContent) => void saveNote(title, noteContent)}
       />
+      {mindMapOpen && (
+        <Suspense fallback={null}>
+          <ArticleMindMapDialog
+            open
+            articleTitle={article.title}
+            mindMap={mindMap}
+            loading={mindMapLoading}
+            generating={mindMapGenerating}
+            error={mindMapError}
+            onClose={() => setMindMapOpen(false)}
+            onGenerate={() => void prepareMindMapGeneration()}
+            onConfigure={() => void openAiConfiguration(null)}
+          />
+        </Suspense>
+      )}
       <AiSettingsDialog
         open={aiSettingsOpen}
         settings={aiSettings}
         loading={aiSettingsLoading}
         busy={aiSettingsBusy}
         error={aiSettingsError}
-        onClose={() => { setAiSettingsOpen(false); setContinueAfterConfig(false); }}
+        onClose={() => { setAiSettingsOpen(false); setContinueAfterConfig(null); }}
         onSave={(settings, apiKey) => void saveAiConfiguration(settings, apiKey)}
         onDeleteKey={() => setDeleteKeyConfirmOpen(true)}
         onRetry={() => void openAiConfiguration(continueAfterConfig)}

@@ -59,8 +59,8 @@ CI 的 build-verify 只证明构建完成，不等同于签名、安装和端到
 发布者应同时更新 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 的版本，并更新 `CHANGELOG.md`。确认工作区检查通过后，创建与版本一致的 `v*` 标签并推送：
 
 ```bash
-git tag -a v0.1.3 -m "Signal v0.1.3"
-git push origin v0.1.3
+git tag -a v0.1.4 -m "Signal v0.1.4"
+git push origin v0.1.4
 ```
 
 `.github/workflows/release.yml` 会确认标签提交属于 `main`，复跑发布卫生、前端与 Rust 检查，验证标签与三个项目版本一致，再为四个平台构建安装包、统一资产名称并生成 `SHA256SUMS`。只有全部检查和四个平台构建都成功后才会发布 GitHub Release；任一环节失败时不会发布半成品版本。

@@ -37,6 +37,8 @@ export function Sidebar() {
   const unreadCounts = useSourcesStore((s) => s.unreadCounts);
   const activeSource = useArticlesStore((s) => s.activeSource);
   const setActiveSource = useArticlesStore((s) => s.setActiveSource);
+  const clearSearch = useArticlesStore((s) => s.clearSearch);
+  const loadArticles = useArticlesStore((s) => s.loadArticles);
   const closeReader = useArticlesStore((s) => s.closeReader);
   const openSettings = useSettingsStore((state) => state.openSettings);
   const activeView = useUiStore((state) => state.activeView);
@@ -48,8 +50,10 @@ export function Sidebar() {
 
   const selectView = (view: ActiveView) => {
     closeReader();
+    clearSearch();
     setActiveView(view);
     setActiveSource(null);
+    void loadArticles();
   };
 
   const openSourceSettings = () => {
@@ -120,8 +124,10 @@ export function Sidebar() {
             aria-current={activeSource === source.id ? "page" : undefined}
             onClick={() => {
               closeReader();
+              clearSearch();
               setActiveSource(activeSource === source.id ? null : source.id);
               setActiveView("dashboard");
+              void loadArticles();
             }}
             className={cn(
               "group relative flex h-10 w-full items-center justify-center rounded-btn px-0 text-left transition min-[1200px]:justify-start min-[1200px]:gap-2.5 min-[1200px]:px-2.5",

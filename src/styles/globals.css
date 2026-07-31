@@ -197,6 +197,21 @@ body.signal-theme-dark {
   container-type: inline-size;
 }
 
+.reader-toolbar-label {
+  display: none;
+}
+
+@container (min-width: 620px) {
+  .reader-toolbar-button {
+    width: auto;
+    padding-inline: 0.75rem;
+  }
+
+  .reader-toolbar-label {
+    display: inline;
+  }
+}
+
 .reader-content-layout {
   display: grid;
   grid-template-columns: minmax(0, 740px);

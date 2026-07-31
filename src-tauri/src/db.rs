@@ -1,11 +1,12 @@
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool};
 use sqlx::Row;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::models::{
-    Article, ArticleAnalytics, ArticleFilter, ArticleInsight, LabelValue, RawArticle,
-    RelatedReading, TrendPoint, UnreadCounts,
+    Article, ArticleAnalytics, ArticleFilter, ArticleInsight, ArticleMindMap, LabelValue,
+    RawArticle, RelatedReading, TrendPoint, UnreadCounts,
 };
 
 const SCHEMA: &str = r#"
@@ -100,6 +101,11 @@ CREATE TABLE IF NOT EXISTS hot_snapshots (
   comments_count INTEGER,
   PRIMARY KEY(article_id, captured_at)
 );
+CREATE TABLE IF NOT EXISTS mind_maps (
+  article_id TEXT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
+  payload TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_hot_snapshots_article_time
   ON hot_snapshots(article_id, captured_at DESC);
 "#;
@@ -111,6 +117,8 @@ pub async fn init_pool(db_path: PathBuf) -> Result<SqlitePool, sqlx::Error> {
     let options = SqliteConnectOptions::new()
         .filename(db_path)
         .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(Duration::from_secs(10))
         .foreign_keys(true);
     let pool = SqlitePool::connect_with(options).await?;
     sqlx::query(SCHEMA).execute(&pool).await?;
@@ -155,6 +163,8 @@ pub async fn insert_articles(
     raws: Vec<RawArticle>,
 ) -> Result<usize, sqlx::Error> {
     let mut new_count = 0usize;
+    // Source schedulers run concurrently, so each fetched batch gets one short write turn.
+    let mut transaction = pool.begin().await?;
     for raw in raws {
         let a = raw.into_article(source, fetched_at);
         let result = sqlx::query(
@@ -178,7 +188,7 @@ pub async fn insert_articles(
         .bind(a.published_at)
         .bind(a.fetched_at)
         .bind(a.thumbnail.as_deref())
-        .execute(pool)
+        .execute(&mut *transaction)
         .await?;
         if result.rows_affected() > 0 {
             new_count += 1;
@@ -199,7 +209,7 @@ pub async fn insert_articles(
             .bind(a.fetched_at)
             .bind(a.thumbnail.as_deref())
             .bind(&a.id)
-            .execute(pool)
+            .execute(&mut *transaction)
             .await?;
         }
         sqlx::query(
@@ -210,9 +220,10 @@ pub async fn insert_articles(
         .bind(fetched_at)
         .bind(a.hot_score)
         .bind(a.comments_count)
-        .execute(pool)
+        .execute(&mut *transaction)
         .await?;
     }
+    transaction.commit().await?;
     Ok(new_count)
 }
 
@@ -554,6 +565,31 @@ pub async fn get_article_insight(
     .transpose()
 }
 
+pub async fn get_article_mind_map(
+    pool: &SqlitePool,
+    article_id: &str,
+) -> Result<Option<ArticleMindMap>, sqlx::Error> {
+    let row = sqlx::query("SELECT payload FROM mind_maps WHERE article_id = ?")
+        .bind(article_id)
+        .fetch_optional(pool)
+        .await?;
+    row.map(|row| {
+        serde_json::from_str::<ArticleMindMap>(&row.get::<String, _>("payload"))
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))
+    })
+    .transpose()
+}
+
+pub async fn save_article_mind_map(
+    pool: &SqlitePool,
+    article_id: &str,
+    map: &ArticleMindMap,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO mind_maps (article_id, payload, updated_at) VALUES (?, ?, ?) ON CONFLICT(article_id) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at")
+        .bind(article_id).bind(serde_json::to_string(map).map_err(|e| sqlx::Error::Encode(Box::new(e)))?).bind(map.updated_at).execute(pool).await?;
+    Ok(())
+}
+
 pub async fn save_article_insight(
     pool: &SqlitePool,
     article_id: &str,
@@ -883,7 +919,7 @@ pub async fn cleanup_old(pool: &SqlitePool) -> Result<(), sqlx::Error> {
          WHERE ((published_at > 0 AND published_at < ?) OR fetched_at < ?) AND id NOT IN (
            SELECT article_id FROM article_user_state
            WHERE bookmarked = 1 OR read_later = 1 OR in_knowledge = 1
-         )",
+         ) AND id NOT IN (SELECT article_id FROM mind_maps)",
     )
     .bind(cutoff)
     .bind(cutoff)
@@ -899,7 +935,7 @@ pub async fn cleanup_old(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         ) AND id NOT IN (
             SELECT article_id FROM article_user_state
             WHERE bookmarked = 1 OR read_later = 1 OR in_knowledge = 1
-        )",
+        ) AND id NOT IN (SELECT article_id FROM mind_maps)",
     )
     .execute(pool)
     .await?;
@@ -1270,6 +1306,41 @@ mod tests {
             .iter()
             .any(|item| item.label == "云原生与运维"));
         assert!(analytics.domains.iter().any(|item| item.label == "安全"));
+    }
+
+    #[tokio::test]
+    async fn persists_article_mind_map() {
+        let pool = test_pool().await;
+        insert_articles(
+            &pool,
+            "test",
+            chrono::Utc::now().timestamp(),
+            vec![raw("map", "Map", "content")],
+        )
+        .await
+        .expect("insert");
+        let map = ArticleMindMap {
+            title: "Map".into(),
+            nodes: vec![crate::models::MindMapNode {
+                id: "root".into(),
+                label: "Root".into(),
+                detail: "Article root".into(),
+                kind: "topic".into(),
+            }],
+            edges: vec![],
+            updated_at: 42,
+        };
+        save_article_mind_map(&pool, "test:map", &map)
+            .await
+            .expect("save map");
+        assert_eq!(
+            get_article_mind_map(&pool, "test:map")
+                .await
+                .expect("get map")
+                .expect("map")
+                .updated_at,
+            42
+        );
     }
 
     #[test]

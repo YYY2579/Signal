@@ -30,6 +30,34 @@ import { useArticlesStore } from "../../stores/articlesStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useUiStore, type TopBarPanel } from "../../stores/uiStore";
 
+type SearchEvidence = {
+  localCandidates: number;
+  citedArticles: number;
+  scope: "local_and_model" | "model_only";
+  freshnessNotice: string | null;
+};
+
+function normalizeSearchEvidence(response: unknown, resultCount: number): SearchEvidence {
+  const payload = response && typeof response === "object" ? (response as Record<string, unknown>) : {};
+  const numberField = (key: string, fallback: number) =>
+    typeof payload[key] === "number" && Number.isFinite(payload[key] as number)
+      ? Math.max(0, Math.trunc(payload[key] as number))
+      : fallback;
+  const rawScope = payload.scope ?? payload.answer_scope;
+  const scope = rawScope === "model_only" || rawScope === "model-only"
+    ? "model_only"
+    : "local_and_model";
+  return {
+    localCandidates: numberField("local_candidate_count", resultCount),
+    citedArticles: numberField("cited_article_count", resultCount),
+    scope,
+    freshnessNotice:
+      typeof payload.freshness_notice === "string" && payload.freshness_notice.trim()
+        ? payload.freshness_notice.trim()
+        : null,
+  };
+}
+
 function usePanelFocus(
   open: boolean,
   close: () => void,
@@ -461,6 +489,7 @@ export function AiAssistantPanel() {
   const [query, setQuery] = useState(input);
   const [answer, setAnswer] = useState("");
   const [results, setResults] = useState<Article[]>([]);
+  const [searchEvidence, setSearchEvidence] = useState<SearchEvidence | null>(null);
   const [insight, setInsight] = useState<ArticleInsight | null>(null);
   const [insightLoading, setInsightLoading] = useState(false);
   const [reviewBusy, setReviewBusy] = useState(false);
@@ -481,6 +510,7 @@ export function AiAssistantPanel() {
     setQuery(input);
     setAnswer("");
     setResults([]);
+    setSearchEvidence(null);
     setInsight(null);
     setInsightLoading(false);
     setReviewBusy(false);
@@ -570,16 +600,18 @@ export function AiAssistantPanel() {
     setAiRequestState("preparing", { input: normalized, error: null });
     setAnswer("");
     setResults([]);
+    setSearchEvidence(null);
     try {
       setAiRequestState("streaming", { input: normalized, error: null });
       const response = await api.aiSearch(normalized);
       if (requestId !== requestSequence.current) return;
       setAnswer(response.answer);
       setResults(response.articles);
+      setSearchEvidence(normalizeSearchEvidence(response, response.articles.length));
       setAiRequestState("complete", { input: normalized, error: null });
       addNotification({
         title: "AI 搜索完成",
-        description: `${response.articles.length} 篇引用文章`,
+        description: `${response.articles.length} 篇本地引用`,
         kind: "success",
       });
     } catch (requestError) {
@@ -793,6 +825,25 @@ export function AiAssistantPanel() {
                         {answer || "没有足够证据生成回答。"}
                       </p>
                     </div>
+                    <section className="rounded-btn border border-line bg-panel px-3 py-2.5" aria-label="回答证据范围">
+                      <div className="flex items-center justify-between gap-2 text-[10px]">
+                        <span className="font-semibold text-ink-2">回答范围</span>
+                        <span className={cn(
+                          "rounded-full px-1.5 py-0.5 font-semibold",
+                          searchEvidence?.scope === "model_only"
+                            ? "bg-amber-50 text-amber-700"
+                            : "bg-indigo-50 text-accent",
+                        )}>
+                          {searchEvidence?.scope === "model_only" ? "模型知识" : "本地证据 + 模型知识"}
+                        </span>
+                      </div>
+                      <p className="mt-1.5 text-[10px] leading-4 text-faint">
+                        本地候选 {searchEvidence?.localCandidates ?? results.length} 篇，引用 {searchEvidence?.citedArticles ?? results.length} 篇。AI Search 不执行实时互联网检索，模型知识可能不是最新信息。
+                      </p>
+                      {searchEvidence?.freshnessNotice && (
+                        <p className="mt-1 text-[10px] leading-4 text-amber-700">{searchEvidence.freshnessNotice}</p>
+                      )}
+                    </section>
                     {results.length > 0 && (
                       <section aria-label="引用文章" className="space-y-1.5">
                         <p className="text-[10px] font-semibold text-faint">引用文章</p>
@@ -821,10 +872,10 @@ export function AiAssistantPanel() {
                       {running ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <Bot className="h-5 w-5" />}
                     </span>
                     <p className="text-[13px] font-semibold text-ink-2">
-                      {running ? "正在处理真实请求" : "从当前情报库检索"}
+                      {running ? "正在组合本地证据与模型知识" : "本地证据 + 模型知识"}
                     </p>
                     <p className="mt-1.5 text-[11px] leading-5 text-faint">
-                      模型只会收到本地候选文章的标题和来源摘要
+                      基于本地情报库与模型知识回答，不执行实时互联网搜索
                     </p>
                   </div>
                 )

@@ -28,6 +28,7 @@ interface ArticlesState {
   loadArticles: () => Promise<boolean>;
   setActiveSource: (source: string | null) => void;
   setSearchQuery: (q: string) => void;
+  clearSearch: () => void;
   openArticle: (id: string) => void;
   openArticleResult: (article: Article) => void;
   closeReader: () => void;
@@ -169,6 +170,16 @@ export const useArticlesStore = create<ArticlesState>((set, get) => ({
     set({ searchQuery: q });
     if (searchTimer) clearTimeout(searchTimer);
     searchTimer = setTimeout(() => get().loadArticles(), 250);
+  },
+
+  clearSearch: () => {
+    // A pending debounced search must never replace the destination selected by navigation.
+    if (searchTimer) {
+      clearTimeout(searchTimer);
+      searchTimer = null;
+    }
+    latestLoad += 1;
+    set({ searchQuery: "" });
   },
 
   openArticle: (id) => {

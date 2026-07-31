@@ -4,6 +4,7 @@ import type {
   Article,
   ArticleAnalytics,
   ArticleInsight,
+  ArticleMindMap,
   ArticleFilter,
   AiPreferences,
   AiSearchResponse,
@@ -102,6 +103,12 @@ export const api = {
 
   generateArticleInsight: (articleId: string) =>
     invoke<ArticleInsight>("generate_article_insight", { articleId }),
+
+  getArticleMindMap: (articleId: string) =>
+    invoke<ArticleMindMap | null>("get_article_mind_map", { articleId }),
+
+  generateArticleMindMap: (articleId: string) =>
+    invoke<ArticleMindMap>("generate_article_mind_map", { articleId }),
 
   reviewArticleInsight: (
     articleId: string,

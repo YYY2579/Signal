@@ -58,6 +58,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     } catch (e) {
       console.error("updateLogin failed", e);
       set({ login: previous });
+      throw e;
     }
   },
 

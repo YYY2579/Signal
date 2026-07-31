@@ -216,6 +216,71 @@ pub struct AiValidation {
 pub struct AiSearchResponse {
     pub answer: String,
     pub articles: Vec<Article>,
+    pub local_candidate_count: usize,
+    pub cited_article_count: usize,
+    pub answer_scope: AiAnswerScope,
+    pub freshness_notice: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AiAnswerScope {
+    #[serde(rename = "local+model")]
+    LocalAndModel,
+    #[serde(rename = "model-only")]
+    ModelOnly,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MindMapNode {
+    pub id: String,
+    pub label: String,
+    pub detail: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MindMapEdge {
+    pub source: String,
+    pub target: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArticleMindMap {
+    pub title: String,
+    pub nodes: Vec<MindMapNode>,
+    pub edges: Vec<MindMapEdge>,
+    pub updated_at: i64,
+}
+
+impl ArticleMindMap {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.title.trim().is_empty() || self.nodes.is_empty() || self.nodes.len() > 40 {
+            return Err("思维导图必须包含 1-40 个节点和标题".into());
+        }
+        let mut ids = std::collections::HashSet::new();
+        for node in &self.nodes {
+            if node.id.trim().is_empty()
+                || node.label.trim().is_empty()
+                || node.detail.trim().is_empty()
+                || node.kind.trim().is_empty()
+                || !ids.insert(node.id.trim())
+            {
+                return Err("思维导图节点 ID 必须唯一且节点内容不能为空".into());
+            }
+        }
+        for edge in &self.edges {
+            if edge.source.trim().is_empty()
+                || edge.target.trim().is_empty()
+                || !ids.contains(edge.source.trim())
+                || !ids.contains(edge.target.trim())
+                || edge.source.trim() == edge.target.trim()
+            {
+                return Err("思维导图边必须引用不同的已有节点".into());
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -441,7 +506,7 @@ pub type UnreadCounts = std::collections::HashMap<String, usize>;
 
 #[cfg(test)]
 mod tests {
-    use super::extractive_summary;
+    use super::{extractive_summary, AiAnswerScope, ArticleMindMap, MindMapEdge, MindMapNode};
 
     #[test]
     fn extractive_summary_selects_relevant_sentences_and_stays_bounded() {
@@ -461,5 +526,41 @@ mod tests {
             extractive_summary("Signal", "A concise source abstract.", 360),
             "A concise source abstract."
         );
+    }
+
+    #[test]
+    fn mind_map_rejects_duplicate_nodes_and_dangling_edges() {
+        let mut map = ArticleMindMap {
+            title: "Map".into(),
+            nodes: vec![MindMapNode {
+                id: "root".into(),
+                label: "Root".into(),
+                detail: "d".into(),
+                kind: "topic".into(),
+            }],
+            edges: vec![MindMapEdge {
+                source: "root".into(),
+                target: "missing".into(),
+                label: "".into(),
+            }],
+            updated_at: 1,
+        };
+        assert!(map.validate().is_err());
+        map.edges.clear();
+        map.nodes.push(MindMapNode {
+            id: "root".into(),
+            label: "Duplicate".into(),
+            detail: "d".into(),
+            kind: "topic".into(),
+        });
+        assert!(map.validate().is_err());
+        map.nodes.truncate(1);
+        map.edges = vec![MindMapEdge {
+            source: "root".into(),
+            target: "root".into(),
+            label: "self".into(),
+        }];
+        assert!(map.validate().is_err());
+        assert_eq!(AiAnswerScope::LocalAndModel, AiAnswerScope::LocalAndModel);
     }
 }

@@ -80,6 +80,30 @@ export interface AiValidation {
 export interface AiSearchResponse {
   answer: string;
   articles: Article[];
+  local_candidate_count: number;
+  cited_article_count: number;
+  answer_scope: "local+model" | "model-only";
+  freshness_notice: string;
+}
+
+export interface MindMapNode {
+  id: string;
+  label: string;
+  detail: string;
+  kind: string;
+}
+
+export interface MindMapEdge {
+  source: string;
+  target: string;
+  label: string;
+}
+
+export interface ArticleMindMap {
+  title: string;
+  nodes: MindMapNode[];
+  edges: MindMapEdge[];
+  updated_at: number;
 }
 
 export interface RelatedReading {
